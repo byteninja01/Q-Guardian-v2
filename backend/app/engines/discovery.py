@@ -14,10 +14,10 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # Priority order: S1 (most critical) → S5 (public)
 # Based on RBI classification guidelines for banking assets
 TIER_TAXONOMY = {
-    "S1": ["payment", "swift", "rtgs", "neft", "core-banking", "cbs", "transfer", "settle", "finacle"],
+    "S1": ["payment", "hsm", "kms", "crypto-key", "vault", "settlement", "core-engine", "auth-gateway"],
     "S2": ["auth", "login", "sso", "kyc", "identity", "oauth", "token", "biometric", "2fa", "otp"],
-    "S3": ["account", "statement", "txn", "transaction", "history", "passbook", "ledger", "balance"],
-    "S4": ["api", "internal", "vpn", "intranet", "admin", "mgmt", "manage", "backoffice", "gateway"],
+    "S3": ["account", "statement", "txn", "transaction", "history", "database", "ledger", "storage"],
+    "S4": ["api", "internal", "vpn", "intranet", "admin", "mgmt", "manage", "gateway", "service"],
     "S5": ["www", "web", "portal", "public", "info", "static", "cdn", "media", "blog"],
 }
 
@@ -146,8 +146,6 @@ def get_real_tls_info(hostname: str):
     return result
 
 def scan_asset(hostname: str, base_domain: str = ""):
-    is_pnb = "pnb" in hostname
-    
     tls_data = get_real_tls_info(hostname)
     
     if tls_data.get("error"):

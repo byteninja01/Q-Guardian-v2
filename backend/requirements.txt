@@ -15,3 +15,7 @@ numpy
 matplotlib
 python-dotenv
 cryptography
+cyclonedx-python-lib
+tree-sitter
+lief
+jinja2

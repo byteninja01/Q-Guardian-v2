@@ -7,15 +7,23 @@ export default {
   theme: {
     extend: {
       colors: {
+        brand: {
+          dark: "#0F172A",
+          accent: "#6366F1",
+          cyan: "#06B6D4",
+          emerald: "#10B981",
+          light: "#F1F5F9",
+        },
+        // Alias for smooth theme migration
         pnb: {
-          maroon: "#A20C39",
-          gold: "#FBBC09",
-          light: "#DBE9F4",
-          dark: "#1e293b",
+          maroon: "#4F46E5", // Modern Indigo
+          gold: "#06B6D4",   // Modern Cyan Accent
+          light: "#F1F5F9",
+          dark: "#0F172A",
         }
       },
       fontFamily: {
-        sans: ['Arial', 'ui-sans-serif', 'system-ui'],
+        sans: ['Inter', 'system-ui', 'sans-serif'],
       }
     },
   },

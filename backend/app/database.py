@@ -29,17 +29,37 @@ class DBAsset(SQLModel, table=True):
     asset_uuid: str = Field(index=True)
     job_uuid: str = Field(index=True)
     hostname: str
-    tls_version: str
+    tls_version: str = Field(default="1.3")
     algorithm: str
-    key_size: int
-    cipher_suite: str
-    forward_secrecy: bool
-    cert_valid: bool
-    cert_expiry: str
-    sensitivity_tier: str
-    is_pqc: bool
-    policy_compliant: bool
-    qtri_score: int
+    key_size: int = Field(default=2048)
+    cipher_suite: str = Field(default="UNKNOWN")
+    forward_secrecy: bool = Field(default=True)
+    cert_valid: bool = Field(default=True)
+    cert_expiry: str = Field(default_factory=lambda: datetime.now().isoformat())
+    sensitivity_tier: str = Field(default="S3")
+    is_pqc: bool = Field(default=False)
+    policy_compliant: bool = Field(default=True)
+    qtri_score: int = Field(default=80)
+    
+    # 🌟 Multi-Source Discovered Asset Fields (v2)
+    source_type: str = Field(default="network_live") # static_code, binary, container, cloud_kms, network_live
+    asset_type: str = Field(default="service") # service, library, binary, secret, kms_key
+    evidence_file: Optional[str] = None
+    evidence_line: Optional[int] = None
+    evidence_offset: Optional[int] = None
+    evidence_function: Optional[str] = None
+    
+    # CycloneDX 1.6 Cryptographic Asset Properties
+    primitive: Optional[str] = "key-agreement" # public-key-encryption, signature, key-agreement, hash, symmetric-cipher
+    mode: Optional[str] = None
+    parameter_set_identifier: Optional[str] = None
+    classical_security_level: Optional[int] = 112
+    nist_quantum_security_level: Optional[int] = 0 # 0=vulnerable/broken, 1..5=PQC levels
+    oid: Optional[str] = None
+    
+    # Divergence and Maturity
+    divergence_flag: Optional[str] = None # e.g. DIV_STATIC_1.3_VS_LIVE_1.0
+    maturity_level: int = Field(default=1) # 1 to 5 Crypto-Agility Maturity Score
     
     # Mosca data parsed as JSON
     mosca_data: str 
@@ -54,6 +74,23 @@ class DBAsset(SQLModel, table=True):
     discovered_endpoints_data: Optional[str] = None
     
     last_scanned: str
+
+class DBAuditLog(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+    username: str = Field(index=True)
+    action: str = Field(index=True)
+    target: str
+    details: Optional[str] = None
+
+class DBCBOMHistory(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+    scan_uuid: str = Field(index=True)
+    total_assets: int
+    pqc_assets: int
+    critical_risks: int
+    cbom_json_data: str
 
 def create_db_and_tables():
     SQLModel.metadata.create_all(engine)

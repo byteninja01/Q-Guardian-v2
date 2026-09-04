@@ -5,17 +5,17 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# 🌐 Banking-Sector Targeted Wordlist
-BANKING_API_WORDLIST = [
+# 🌐 Enterprise Critical-Infrastructure Wordlist
+ENTERPRISE_API_WORDLIST = [
     # General API versions
     "api", "v1", "v2", "v3", "api/v1", "api/v2", "api/v3", "rest/v1",
     
     # Auth & Identity
-    "auth", "login", "sso", "identity", "oauth", "token", "authorize",
+    "auth", "login", "sso", "identity", "oauth", "token", "authorize", "kms", "vault",
     
-    # Banking Core & Transaction Services
-    "cbs", "core", "transfer", "payment", "rtgs", "neft", "imps", "swift", "upi",
-    "accounts", "ledger", "statement", "kyc", "biometric", "finacle", "flexcube",
+    # Core Services & APIs
+    "core", "transfer", "payment", "accounts", "ledger", "statement", "kyc", "biometric",
+    "services", "gateway", "crypto", "keys", "hsm", "signing",
     
     # Management & Documentation
     "admin", "manage", "mgmt", "config", "health", "metrics", "status",
@@ -83,7 +83,7 @@ def discover_active_surface(base_url: str):
         # 3. Targeted Directory Fuzzing
         # To keep discovery efficient, we only fuzz a curated subset per host
         # During a background scan, we'll limit this.
-        for path in BANKING_API_WORDLIST:
+        for path in ENTERPRISE_API_WORDLIST:
             # Prepend / if missing
             fuzz_path = f"/{path}" if not path.startswith("/") else path
             fuzz_url = urljoin(base_url, fuzz_path)
