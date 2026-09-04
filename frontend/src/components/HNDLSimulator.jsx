@@ -9,7 +9,7 @@ const HNDLSimulator = ({ assets }) => {
     return (
       <div className="glass-card p-12 text-center">
         <div className="flex justify-center mb-4 text-green-600"><ShieldAlert size={48} /></div>
-        <h3 className="text-pnb-maroon font-black text-xl mb-2">NO HNDL EXPOSURE DETECTED</h3>
+        <h3 className="text-slate-900 font-black text-xl mb-2">NO HNDL EXPOSURE DETECTED</h3>
         <p className="text-slate-500 text-sm">All discovered assets utilize Perfect Forward Secrecy (PFS), mitigating Harvest-Now-Decrypt-Later threats.</p>
       </div>
     );
@@ -30,8 +30,8 @@ const HNDLSimulator = ({ assets }) => {
   return (
     <div className="space-y-6">
       <div className="glass-card p-6 border-l-4 border-red-600">
-        <h3 className="text-pnb-maroon font-black text-sm mb-4 flex items-center gap-2">
-          <Activity size={18} /> HARVEST-NOW-DECRYPT-LATER (HNDL) EXPOSURE TIMELINE
+        <h3 className="text-slate-900 font-black text-sm mb-4 flex items-center gap-2">
+          <Activity size={18} className="text-red-600" /> HARVEST-NOW-DECRYPT-LATER (HNDL) EXPOSURE TIMELINE
         </h3>
         <div className="h-64">
           <ResponsiveContainer width="100%" height="100%">

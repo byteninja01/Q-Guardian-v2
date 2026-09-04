@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from sqlmodel import Session, select
 
 # Import DB
-from app.database import engine, create_db_and_tables, get_session, DBScanJob, DBAsset
+from app.database import engine, create_db_and_tables, get_session, DBScanJob, DBAsset, DBCBOMHistory
 from app.settings import FRONTEND_ORIGINS, FRONTEND_ORIGIN_REGEX
 from app.auth import (
     LoginRequest, TokenResponse,
@@ -32,7 +32,7 @@ from app.engines.hndl import calculate_hndl_exposure
 from app.engines.cbom import CBOMGenerator
 from app.engines.migration import get_migration_playbook
 from app.engines.reporting import generate_board_brief_pdf
-from app.engines.compliance import map_to_rbi_controls
+from app.engines.compliance import map_to_rbi_controls, map_to_all_frameworks
 from app.engines.port_scanner import run_port_scan
 from app.engines.api_scanner import run_api_scan
 
@@ -288,7 +288,7 @@ async def get_board_brief(
     
     pdf_buffer = generate_board_brief_pdf(assets, rating, scan_date=scan_date)
     return StreamingResponse(pdf_buffer, media_type="application/pdf", headers={
-        "Content-Disposition": "attachment; filename=PNB_Board_Brief.pdf"
+        "Content-Disposition": "attachment; filename=Q_Guardian_Board_Brief.pdf"
     })
 
 @app.get("/api/v1/cbom/export/pdf", tags=["Reports"])
@@ -302,7 +302,7 @@ async def get_cbom_pdf(
         
     pdf_buffer = CBOMGenerator.export_pdf(assets)
     return StreamingResponse(pdf_buffer, media_type="application/pdf", headers={
-        "Content-Disposition": "attachment; filename=PNB_CBOM_Export.pdf"
+        "Content-Disposition": "attachment; filename=Q_Guardian_CBOM.pdf"
     })
 
 @app.get("/api/v1/compliance/rbi", tags=["Compliance"])
@@ -312,6 +312,18 @@ async def get_rbi_compliance(
 ):
     assets = _serialize_assets(session)
     return map_to_rbi_controls(assets)
+
+@app.get("/api/v1/compliance/frameworks", tags=["Compliance"])
+async def get_compliance_frameworks(
+    session: Session = Depends(get_session),
+    current_user: dict = Depends(verify_token)  # 🔒 Protected
+):
+    """
+    Cross-framework regulatory mapping: RBI CSF 2.0, NIST IR 8547 PQC
+    transition milestones, and India DST/TEC (National Quantum Mission) flags.
+    """
+    assets = _serialize_assets(session)
+    return map_to_all_frameworks(assets)
 
 class ChatMessage(BaseModel):
     message: str
@@ -357,10 +369,19 @@ def _save_discovered_assets_to_db(assets: list, job_uuid: str):
     """Persist multi-source discovered assets into DB using the unified schema."""
     with Session(engine) as session:
         for a in assets:
-            mosca = {
-                "risk_state": "CRITICAL" if a["qtri_score"] < 30
-                    else ("WARNING" if a["qtri_score"] < 60 else "MONITOR")
-            }
+            # Real Mosca clocks (X+Y>Z) fed from the actual scanner surface:
+            # X = migration complexity from algorithm/key-size/primitive,
+            # Y = tier shelf-life, Z = CRQC horizon.
+            try:
+                mosca = calculate_mosca_clocks(
+                    derive_migration_complexity(a),
+                    a.get("sensitivity_tier", "S3"),
+                )
+            except Exception:
+                mosca = {
+                    "risk_state": "CRITICAL" if a.get("qtri_score", 50) < 30
+                        else ("WARNING" if a.get("qtri_score", 50) < 60 else "MONITOR")
+                }
             db_asset = DBAsset(
                 asset_uuid=str(uuid.uuid4()),
                 job_uuid=job_uuid,
@@ -394,6 +415,32 @@ def _save_discovered_assets_to_db(assets: list, job_uuid: str):
             )
             session.add(db_asset)
         session.commit()
+
+        # Record a CBOM history snapshot for this scan job so the GUI can diff
+        # "before vs after" across the two most recent scanner runs.
+        try:
+            snapshot = [
+                {
+                    "name": a.get("hostname"),
+                    "algorithm": a.get("algorithm"),
+                    "source_type": a.get("source_type"),
+                    "key_size": a.get("key_size"),
+                    "qtri_score": a.get("qtri_score"),
+                    "is_pqc": bool(a.get("is_pqc")),
+                }
+                for a in assets
+            ]
+            history = DBCBOMHistory(
+                scan_uuid=job_uuid,
+                total_assets=len(snapshot),
+                pqc_assets=sum(1 for s in snapshot if s["is_pqc"]),
+                critical_risks=sum(1 for s in snapshot if (s.get("qtri_score") or 100) < 30),
+                cbom_json_data=json.dumps(snapshot),
+            )
+            session.add(history)
+            session.commit()
+        except Exception as e:
+            print(f"CBOM history snapshot failed for {job_uuid}: {e}")
 
 _save_static_assets_to_db = _save_discovered_assets_to_db
 
@@ -568,6 +615,81 @@ async def reconcile_cbom_endpoint(
     """Reconcile assets across static, binary, container, and network sources to detect divergence."""
     result = reconcile_assets(session)
     return result
+
+@app.get("/api/v1/cbom/history", tags=["Reports"])
+async def get_cbom_history(
+    session: Session = Depends(get_session),
+    current_user: dict = Depends(verify_token)  # 🔒 Protected
+):
+    """List the most recent CBOM scan snapshots (for before/after diffs)."""
+    rows = session.exec(
+        select(DBCBOMHistory).order_by(DBCBOMHistory.id.desc()).limit(10)
+    ).all()
+    return [
+        {
+            "scan_uuid": r.scan_uuid,
+            "timestamp": r.timestamp,
+            "total_assets": r.total_assets,
+            "pqc_assets": r.pqc_assets,
+            "critical_risks": r.critical_risks,
+        }
+        for r in rows
+    ]
+
+@app.get("/api/v1/cbom/diff", tags=["Reports"])
+async def get_cbom_diff(
+    session: Session = Depends(get_session),
+    current_user: dict = Depends(verify_token)  # 🔒 Protected
+):
+    """
+    Simple before/after CBOM diff between the two most recent scan snapshots.
+    Components are keyed by (hostname, algorithm) so a repeat finding in the
+    same location does not count as a change.
+    """
+    rows = session.exec(
+        select(DBCBOMHistory).order_by(DBCBOMHistory.id.desc()).limit(2)
+    ).all()
+    if len(rows) < 2:
+        return {
+            "status": "insufficient_history",
+            "detail": "Need at least two scan snapshots to build a diff. Run two scans.",
+        }
+
+    def _inventory(row) -> dict:
+        try:
+            items = json.loads(row.cbom_json_data)
+        except Exception:
+            items = []
+        return {
+            f"{it.get('name')}|{it.get('algorithm')}": it
+            for it in items if it.get("name") and it.get("algorithm")
+        }
+
+    before, after = rows[1], rows[0]  # id DESC -> latest first
+    before_map = _inventory(before)
+    after_map = _inventory(after)
+    added = [v for k, v in after_map.items() if k not in before_map]
+    removed = [v for k, v in before_map.items() if k not in after_map]
+
+    def _source_delta(items):
+        delta = {}
+        for it in items:
+            src = it.get("source_type") or "network_live"
+            delta[src] = delta.get(src, 0) + 1
+        return delta
+
+    return {
+        "status": "completed",
+        "before": {"scan_uuid": before.scan_uuid, "timestamp": before.timestamp, "total": before.total_assets},
+        "after": {"scan_uuid": after.scan_uuid, "timestamp": after.timestamp, "total": after.total_assets},
+        "net_change": len(after_map) - len(before_map),
+        "added_count": len(added),
+        "removed_count": len(removed),
+        "added": sorted(added, key=lambda x: str(x.get("name"))),
+        "removed": sorted(removed, key=lambda x: str(x.get("name"))),
+        "added_by_source": _source_delta(added),
+        "removed_by_source": _source_delta(removed),
+    }
 
 @app.get("/api/v1/cbom/divergence", tags=["Reports"])
 async def get_divergent_assets(

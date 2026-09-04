@@ -7,6 +7,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 
 try:
+    from cyclonedx.model import Property
     from cyclonedx.model.bom import Bom
     from cyclonedx.model.component import Component, ComponentType
     from cyclonedx.model.crypto import CryptoProperties, CryptoAssetType, AlgorithmProperties, CryptoPrimitive
@@ -14,6 +15,31 @@ try:
     HAS_CYCLONEDX_LIB = True
 except ImportError:
     HAS_CYCLONEDX_LIB = False
+
+
+def _component_properties(asset: dict) -> list:
+    """Attach per-asset source context as CycloneDX 1.6 custom properties
+    so every CBOM component stays traceable to its discovery vector
+    (network-tls / static-source / container-image / binary)."""
+    props = []
+    for key, val in [
+        ("sourceType", asset.get("source_type")),
+        ("assetType", asset.get("asset_type")),
+        ("sensitivityTier", asset.get("sensitivity_tier")),
+        ("primitive", asset.get("primitive")),
+        ("mode", asset.get("mode")),
+        ("classicalSecurityLevel", asset.get("classical_security_level")),
+        ("nistQuantumSecurityLevel", asset.get("nist_quantum_security_level")),
+        ("qtriScore", asset.get("qtri_score")),
+        ("isPqc", asset.get("is_pqc")),
+        ("divergenceFlag", asset.get("divergence_flag")),
+        ("evidenceFile", asset.get("evidence_file")),
+        ("evidenceLine", asset.get("evidence_line")),
+        ("evidenceOffset", asset.get("evidence_offset")),
+    ]:
+        if val is not None and val != "":
+            props.append(Property(name=f"qguardian:{key}", value=str(val)))
+    return props
 
 class CBOMGenerator:
     @staticmethod
@@ -41,10 +67,12 @@ class CBOMGenerator:
                 elif "SHA" in algo_name or "HASH" in algo_name:
                     prim = CryptoPrimitive.HASH
 
+                props = _component_properties(asset)
                 comp = Component(
                     name=f"{hostname}:{algo_name}",
                     type=ComponentType.CRYPTOGRAPHIC_ASSET,
                     version=str(asset.get("key_size", "")),
+                    properties=props if props else None,
                     crypto_properties=CryptoProperties(
                         asset_type=CryptoAssetType.ALGORITHM,
                         algorithm_properties=AlgorithmProperties(

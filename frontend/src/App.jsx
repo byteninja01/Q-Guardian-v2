@@ -1,6 +1,6 @@
 import React, { useState, useEffect, Suspense, lazy } from 'react';
 import axios from 'axios';
-import { ShieldCheck, Clock, AlertTriangle, FileText, LayoutDashboard, Database, Activity, Terminal, Radar, TimerReset, Waypoints, FileCode, Layers } from 'lucide-react';
+import { ShieldCheck, Clock, FileText, LayoutDashboard, Database, Activity, Terminal, Radar, TimerReset, Waypoints, Layers, Boxes } from 'lucide-react';
 import Header from './components/Header';
 import PlaybookModal from './components/PlaybookModal';
 import Chatbot from './components/Chatbot';
@@ -21,57 +21,58 @@ const SourceScanner = lazy(() => import('./components/SourceScanner'));
 
 const AnalystLoadingPanel = () => (
   <div className="min-h-[60vh] flex items-center justify-center">
-    <div className="w-full max-w-4xl glass-card border border-slate-800 bg-slate-900 shadow-xl overflow-hidden">
-      <div className="bg-slate-950 text-white px-6 py-5 border-b-4 border-indigo-500">
-        <div className="flex items-center gap-3 text-sm font-black uppercase tracking-[0.2em]">
-          <Activity size={18} className="text-indigo-400 animate-spin" />
-          Initializing Cryptographic Analyst Workspace
+    <div className="w-full max-w-4xl glass-card overflow-hidden">
+      <div className="flex items-center gap-3 border-b border-slate-200 bg-slate-50 px-6 py-5">          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-cobalt-50 text-cobalt-600">
+          <Activity size={16} className="animate-spin" />
         </div>
-        <p className="mt-2 text-xs text-slate-400 font-semibold">
-          Establishing secure data channels, loading multi-source posture, and preparing live intelligence modules.
-        </p>
+        <div>
+          <div className="flex items-center gap-2 text-sm font-bold tracking-tight text-slate-900">
+            Initializing Cryptographic Analyst Workspace
+          </div>
+          <p className="mt-0.5 text-xs text-slate-500">
+            Establishing secure data channels, loading multi-source posture, and preparing live intelligence modules.
+          </p>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-6">
         <InfoTile
-          icon={<Radar size={18} />}
-          title="Start Here"
+          icon={<Radar size={16} />}
+          title="Start here"
           body="Use TRIGGER FULL SCAN to assess an enterprise domain or use Multi-Source Scanner for containers and binaries."
         />
         <InfoTile
-          icon={<TimerReset size={18} />}
-          title="Typical Runtime"
+          icon={<TimerReset size={16} />}
+          title="Typical runtime"
           body="Average full scans usually complete in 2 to 5 minutes, depending on discovery depth, open services, and endpoint latency."
         />
         <InfoTile
-          icon={<Waypoints size={18} />}
-          title="What Loads"
+          icon={<Waypoints size={16} />}
+          title="What loads"
           body="The platform prepares asset inventory, MOSCA risk states, PQC readiness, threat intelligence, and migration playbooks."
         />
       </div>
 
-      <div className="border-t border-slate-100 px-6 py-4 bg-slate-50 text-[11px] text-slate-600 font-semibold flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
+      <div className="flex flex-col gap-1 border-t border-slate-200 bg-slate-50 px-6 py-4 text-[11px] font-medium text-slate-500 md:flex-row md:items-center md:justify-between">
         <span>Tip: the API Scanner tab is best for targeted endpoint checks after the baseline domain scan completes.</span>
-        <span className="text-pnb-maroon uppercase tracking-widest font-black">Secure session in progress</span>
+        <span className="font-mono text-[10px] font-semibold uppercase tracking-widest text-cobalt-700">Secure session in progress</span>
       </div>
     </div>
   </div>
 );
 
 const InfoTile = ({ icon, title, body }) => (
-  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-    <div className="flex items-center gap-2 text-pnb-maroon font-black text-[11px] uppercase tracking-widest">
-      {icon}
+  <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+    <div className="mb-1.5 flex items-center gap-2 text-[11px] font-semibold text-slate-900">
+      <span className="text-cobalt-600">{icon}</span>
       {title}
     </div>
-    <p className="mt-3 text-sm leading-relaxed text-slate-600 font-medium">
-      {body}
-    </p>
+    <p className="text-xs leading-relaxed text-slate-600">{body}</p>
   </div>
 );
 
 function App() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, token } = useAuth();
   const toast = useToast();
   const [activeTab, setActiveTab] = useState('dashboard');
   const [assets, setAssets] = useState([]);
@@ -79,21 +80,20 @@ function App() {
   const [scanning, setScanning] = useState(false);
   const [polling, setPolling] = useState(false);
   
-  const [domain, setDomain] = useState('pnb.bank.in');
+  const [domain, setDomain] = useState('');
   const [selectedAsset, setSelectedAsset] = useState(null);
   const [playbook, setPlaybook] = useState(null);
   const [scanProgress, setScanProgress] = useState(0);
   const [scanStatusMsg, setScanStatusMsg] = useState('');
 
-  if (!isAuthenticated) {
-    return <LoginPage />;
-  }
-
   const fetchData = async () => {
     try {
+      // Pass the bearer token explicitly: AuthProvider's axios-default sync
+      // effect may not have run yet when App's own effect fires right after login.
+      const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
       const [assetsRes, ratingRes] = await Promise.all([
-        axios.get(`${API_BASE}/assets`),
-        axios.get(`${API_BASE}/enterprise/rating`)
+        axios.get(`${API_BASE}/assets`, { headers: authHeaders }),
+        axios.get(`${API_BASE}/enterprise/rating`, { headers: authHeaders })
       ]);
       setAssets(Array.isArray(assetsRes.data) ? assetsRes.data : []);
       setRating(ratingRes.data && typeof ratingRes.data === 'object' ? ratingRes.data : null);
@@ -108,7 +108,9 @@ function App() {
     setScanning(true);
     setPolling(false);
     try {
-      const res = await axios.post(`${API_BASE}/scan/trigger`, { domain });
+      const res = await axios.post(`${API_BASE}/scan/trigger`, { domain }, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      });
       const jobId = res.data.job_id;
       
       // Poll for completion (Adaptive polling for production feel)
@@ -179,19 +181,26 @@ function App() {
     }
   }, [isAuthenticated]);
 
+  // ⚠️ Rules of Hooks: this conditional return MUST stay after every hook call,
+  // otherwise the hook count changes between the unauthenticated and
+  // authenticated renders and React crashes with "Rendered more hooks...".
+  if (!isAuthenticated) {
+    return <LoginPage />;
+  }
+
   const navItems = [
-    { id: 'dashboard',      label: 'POSTURE DASHBOARD',    icon: <LayoutDashboard size={14} /> },
-    { id: 'assets',         label: 'ASSET INVENTORY',      icon: <Database size={14} /> },
-    { id: 'source_scanner', label: 'MULTI-SOURCE SCAN',    icon: <Layers size={14} /> },
-    { id: 'api_scanner',    label: 'API SCANNER',          icon: <Terminal size={14} /> },
-    { id: 'hndl',          label: 'HNDL SIMULATOR',       icon: <Activity size={14} /> },
-    { id: 'graph',         label: 'TOPOLOGY GRAPH',       icon: <Activity size={14} /> },
-    { id: 'compliance',    label: 'CERT-IN MAPPER',       icon: <ShieldCheck size={14} /> },
-    { id: 'cbom',          label: 'CBOM EXPORT',          icon: <FileText size={14} /> },
+    { id: 'dashboard',      label: 'Posture',          icon: <LayoutDashboard size={14} /> },
+    { id: 'assets',         label: 'Inventory',        icon: <Database size={14} /> },
+    { id: 'source_scanner', label: 'Multi-source',     icon: <Layers size={14} /> },
+    { id: 'api_scanner',    label: 'API Scanner',      icon: <Terminal size={14} /> },
+    { id: 'hndl',           label: 'HNDL',             icon: <Clock size={14} /> },
+    { id: 'graph',          label: 'Topology',         icon: <Boxes size={14} /> },
+    { id: 'compliance',     label: 'Cert-IN',          icon: <ShieldCheck size={14} /> },
+    { id: 'cbom',           label: 'CBOM Export',      icon: <FileText size={14} /> },
   ];
 
   return (
-    <div className="min-h-screen pt-28 pb-16 bg-[#f8fafc] w-full isolate">
+    <div className={`min-h-screen pb-16 bg-slate-50 w-full isolate ${scanning || polling ? 'pt-[126px]' : 'pt-24'}`}>
       <Header 
         onScan={handleScan} 
         scanning={scanning} 
@@ -203,17 +212,17 @@ function App() {
       />
       
       <main className="max-w-[1400px] w-full mx-auto px-4 sm:px-6">
-        <nav className="flex gap-2 sm:gap-4 flex-wrap mb-8 justify-center lg:justify-start">
+        <nav className="flex gap-2 flex-wrap mb-6">
           {navItems.map(item => (
             <button
               key={item.id}
               onClick={() => setActiveTab(item.id)}
-              className={`px-4 sm:px-6 py-2 sm:py-2.5 rounded text-[9px] sm:text-[10px] font-black transition-all border-2 flex items-center gap-2 uppercase tracking-widest bg-white shadow-sm
+              className={`px-3.5 py-2 rounded-lg text-[11px] font-semibold transition-all border flex items-center gap-2 tracking-wide
                 ${activeTab === item.id 
-                  ? 'border-indigo-600 text-indigo-600 translate-y-0.5 shadow-none' 
-                  : 'border-slate-200 text-slate-500 hover:border-slate-300 hover:text-slate-800'}`}
+                  ? 'border-slate-900 bg-slate-900 text-white shadow-[0_1px_2px_rgba(15,23,42,0.25)]' 
+                  : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-800'}`}
             >
-              <span className={activeTab === item.id ? 'text-indigo-600' : 'text-slate-400'}>{item.icon}</span> 
+              <span className={activeTab === item.id ? 'text-white' : 'text-slate-400'}>{item.icon}</span> 
               {item.label}
             </button>
           ))}
@@ -243,12 +252,12 @@ function App() {
         onClose={() => { setSelectedAsset(null); setPlaybook(null); }} 
       />
 
-      <footer className="fixed bottom-0 left-0 right-0 bg-slate-950 border-t border-slate-800 text-slate-400 py-2 px-6 text-[10px] flex justify-between uppercase font-bold tracking-widest z-50">
+      <footer className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 text-slate-400 py-2 px-6 text-[10px] flex justify-between uppercase font-bold tracking-widest z-40">
         <div>&copy; 2026 Q-GUARDIAN QUANTUM TRANSITION INTELLIGENCE. ALL RIGHTS RESERVED.</div>
         <div className="flex gap-4">
           <span>PRIVACY POLICY</span>
           <span>DISCLAIMER</span>
-          <span>POWERED BY MOSCA RISK COUNTDOWN ENGINE</span>
+          <span className="hidden sm:inline">POWERED BY MOSCA RISK COUNTDOWN ENGINE</span>
         </div>
       </footer>
     </div>

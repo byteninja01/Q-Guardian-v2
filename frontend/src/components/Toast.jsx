@@ -12,9 +12,9 @@ const Toast = ({ message, type, onClose }) => {
     },
     error: {
       bg: 'bg-red-50',
-      border: 'border-pnb-maroon',
+      border: 'border-red-500',
       text: 'text-red-800',
-      icon: <AlertCircle className="text-pnb-maroon" size={18} />
+      icon: <AlertCircle className="text-red-500" size={18} />
     },
     info: {
       bg: 'bg-blue-50',

@@ -58,7 +58,19 @@ class RuleBasedChatbot:
             
         if intent == "greeting":
             return "Hello! I am Q-Guardian's built-in intelligence assistant. I analyze scans locally. You can ask me about MOSCA, HNDL, PQC, RBI compliance, or ask for a summary of the latest scan results."
-            
+
+        # Grounded local RAG fallback: the FAISS index over the knowledge base
+        # + live inventory answers open-ended questions with source citations.
+        try:
+            from app.engines.rag_advisor import get_advisor
+            advisor = get_advisor()
+            if advisor.available:
+                rag = advisor.answer(user_msg, (scan_context or {}).get("assets"))
+                if rag:
+                    return rag["answer"]
+        except Exception:
+            pass
+
         return "I'm a rule-based cybersecurity assistant built specifically for Q-Guardian. I can explain quantum security concepts (MOSCA, HNDL, PQC), discuss RBI compliance, or summarize recent scan data. Could you rephrase your question?"
 
 # Global chatbot instance

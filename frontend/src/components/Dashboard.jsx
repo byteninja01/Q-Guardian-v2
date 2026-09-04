@@ -1,10 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend } from 'recharts';
+import { BarChart, Bar, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { ShieldCheck, Clock, AlertTriangle, FileText, Activity, Database, CheckCircle2, Radar, TimerReset, Waypoints } from 'lucide-react';
-
 import { motion } from 'framer-motion';
 import { API_BASE } from '../lib/api.js';
+
+const RISK_HEX = {
+  stable:   '#168A68',
+  warning:  '#D99000',
+  critical: '#D92D20',
+  pqc:      '#2457D6',
+};
 
 const Dashboard = ({ assets, rating }) => {
   const [intel, setIntel] = useState([]);
@@ -13,7 +19,7 @@ const Dashboard = ({ assets, rating }) => {
     ? rating
     : { score: 0, status: 'N/A', asset_count: 0 };
 
-useEffect(() => {
+  useEffect(() => {
     axios.get(`${API_BASE}/threat-intel`)
       .then(res => setIntel(Array.isArray(res.data) ? res.data : []))
       .catch(err => console.error("Failed to fetch threat intel", err));
@@ -22,20 +28,18 @@ useEffect(() => {
   if (!rating && safeAssets.length === 0) return <AnalystWarmupPanel />;
 
   if (safeAssets.length === 0) {
-      return (
-          <div className="glass-card p-12 flex flex-col items-center justify-center border-2 border-dashed border-slate-300 min-h-[50vh] text-center bg-white/50 animate-in zoom-in-95 duration-500">
-              <ShieldCheck size={64} className="text-slate-300 mb-6" />
-              <h2 className="text-2xl font-black text-slate-800 mb-2 tracking-tighter">PLATFORM READY</h2>
-              <p className="text-sm text-slate-500 max-w-lg mb-8 font-medium">
-                  Welcome to the **Q-Guardian** Posture Dashboard. There are currently no scanned assets in your inventory. Enter a sector domain (e.g., manipurrural.bank.in) in the header above and trigger a **Global Sector Scan** to begin risk analysis.
-              </p>
-              <div className="flex gap-4 opacity-60 pointer-events-none grayscale">
-                 {/* Preview of core dashboard metrics — shown in greyed state until scan is complete */}
-                 <StatCard title="PQC Ready" value="-" icon={<ShieldCheck size={20}/>} color="#059669" />
-                 <StatCard title="Critical Risks" value="-" icon={<AlertTriangle size={20}/>} color="#dc2626" />
-              </div>
-          </div>
-      );
+    return (
+      <div className="glass-card flex min-h-[50vh] flex-col items-center justify-center border-2 border-dashed border-slate-200 text-center animate-in zoom-in-95 duration-500">
+        <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-lg border border-slate-200 bg-slate-50">
+          <ShieldCheck size={26} className="text-cobalt-600" />
+        </div>
+        <h2 className="text-lg font-bold tracking-tight text-navy">Platform ready</h2>
+        <p className="mb-6 mt-1.5 max-w-lg text-[13px] text-slate-500">
+          There are no scanned assets in the inventory yet. Enter a sector domain in the
+          header above and trigger a network scan to begin post-quantum risk analysis.
+        </p>
+      </div>
+    );
   }
 
   const handleDownloadBrief = () => {
@@ -48,56 +52,62 @@ useEffect(() => {
   const stableCount = safeAssets.filter(a => !a?.mosca || !['CRITICAL', 'WARNING'].includes(a.mosca.risk_state)).length;
 
   const data = [
-    { name: 'Stable', value: stableCount, color: '#10b981' },
-    { name: 'Warning', value: warningCount, color: '#f59e0b' },
-    { name: 'Critical', value: criticalCount, color: '#dc2626' },
-    { name: 'PQC Ready', value: pqcReadyCount, color: '#0f766e' },
+    { name: 'Stable', value: stableCount, color: RISK_HEX.stable },
+    { name: 'Warning', value: warningCount, color: RISK_HEX.warning },
+    { name: 'Critical', value: criticalCount, color: RISK_HEX.critical },
+    { name: 'PQC Ready', value: pqcReadyCount, color: RISK_HEX.pqc },
   ];
 
+  const statusTone =
+    safeRating.score > 700 ? { pill: 'bg-success/10 text-success' }
+      : safeRating.score > 400 ? { pill: 'bg-cobalt-50 text-cobalt-700' }
+      : { pill: 'bg-red-50 text-red-700' };
+
   return (
-    <motion.div 
-      initial={{ opacity: 0, y: 20 }}
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="grid grid-cols-1 md:grid-cols-3 gap-6"
+      className="grid grid-cols-1 gap-4 md:grid-cols-3"
     >
-      <motion.div 
-        whileHover={{ scale: 1.01 }}
-        className="md:col-span-1 glass-card p-6 flex flex-col items-center justify-center bg-gradient-to-b from-white to-slate-50 border-t-4 border-pnb-maroon relative overflow-hidden group"
+      {/* Enterprise rating */}
+      <motion.div
+        whileHover={{ translateY: -1 }}
+        className="panel-elevated flex flex-col items-center justify-center p-7 text-center"
       >
-        <div className="absolute -right-10 -top-10 text-pnb-maroon/5 group-hover:text-pnb-maroon/10 transition-colors pointer-events-none">
-            <ShieldCheck size={200} />
+        <div className="mb-5 flex flex-col items-center">
+          <span className="mb-2 inline-flex h-1 w-7 rounded-full bg-gold" />
+          <div className="qg-label">Enterprise cyber rating</div>
         </div>
-        <h3 className="text-pnb-maroon font-black text-[10px] tracking-widest mb-6 z-10 w-full text-center border-b border-pnb-maroon/10 pb-2 uppercase">ENTERPRISE CYBER RATING</h3>
-        <div className="relative flex items-center justify-center my-4 z-10">
-            <motion.div 
-                initial={{ scale: 0.8 }}
-                animate={{ scale: 1 }}
-                key={safeRating.score}
-                className={`text-8xl font-black tracking-tighter drop-shadow-sm ${safeRating.score > 700 ? 'text-green-600' : safeRating.score > 400 ? 'text-blue-600' : 'text-pnb-maroon'}`}
-            >
-                {safeRating.score}
-            </motion.div>
+        <div className="font-mono text-7xl font-bold tracking-tight text-navy">
+          {safeRating.score}
         </div>
-        <div className={`mt-2 px-6 py-1.5 rounded-full bg-pnb-maroon text-white text-[10px] font-black uppercase tracking-widest z-10 shadow-lg border-2 border-white/20`}>{safeRating.status}</div>
-        
-        <button 
-          onClick={handleDownloadBrief}
-          className="mt-10 group/btn bg-white text-slate-800 font-extrabold text-[10px] uppercase tracking-[0.15em] border-2 border-slate-200 px-8 py-3 rounded-xl hover:bg-slate-900 hover:text-white hover:border-slate-900 transition-all flex items-center gap-3 z-10 shadow-sm hover:shadow-xl"
-        >
-          <FileText size={16} className="group-hover/btn:scale-110 transition-transform" /> EXPORT BOARD BRIEF
+        <span className={`qg-chip mt-3 border border-slate-200 ${statusTone.pill}`}>
+          {safeRating.status}
+        </span>
+        <button onClick={handleDownloadBrief} className="qg-button-ghost mt-6">
+          <FileText size={13} /> Export board brief
         </button>
       </motion.div>
 
-      <div className="md:col-span-2 glass-card p-6 border-t-4 border-pnb-gold">
-        <h3 className="text-pnb-maroon font-black text-sm mb-4">ASSETS BY MOSCA RISK STATE</h3>
-        <div className="h-48">
+      {/* Risk distribution */}
+      <div className="panel-elevated md:col-span-2 p-6">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="qg-heading">Assets by Mosca risk state</h3>
+          <span className="qg-label">{safeAssets.length} assets</span>
+        </div>
+        <div className="h-52">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={data.filter(d => d.value > 0)}>
-              <XAxis dataKey="name" fontSize={10} fontWeight="bold" />
-              <YAxis fontSize={10} allowDecimals={false} />
-              <Tooltip cursor={{fill: 'rgba(162, 12, 57, 0.05)'}} contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} />
-              <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                {data.map((entry, index) => (
+            <BarChart data={data.filter(d => d.value > 0)} margin={{ top: 4, right: 8, left: -18, bottom: 0 }}>
+              <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#667085' }} axisLine={{ stroke: '#E1E6ED' }} tickLine={false} />
+              <YAxis tick={{ fontSize: 11, fill: '#98A2B3' }} axisLine={false} tickLine={false} allowDecimals={false} />
+              <Tooltip
+                cursor={{ fill: 'rgba(11,31,58,0.04)' }}
+                contentStyle={{ backgroundColor: '#ffffff', border: '1px solid #E1E6ED', borderRadius: 8, fontSize: 12, color: '#0B1F3A', boxShadow: '0 8px 20px -12px rgba(11,31,58,0.25)' }}
+                labelStyle={{ color: '#344054', fontWeight: 600 }}
+                itemStyle={{ color: '#0B1F3A' }}
+              />
+              <Bar dataKey="value" radius={[2, 2, 0, 0]} maxBarSize={44}>
+                {data.filter(d => d.value > 0).map((entry, index) => (
                   <Cell key={`cell-${index}`} fill={entry.color} />
                 ))}
               </Bar>
@@ -106,97 +116,97 @@ useEffect(() => {
         </div>
       </div>
 
-      <div className="md:col-span-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard title="Total Assets" value={safeAssets.length} icon={<Database size={20}/>} color="#1e293b" />
-        <StatCard title="Stable Assets" value={stableCount} icon={<CheckCircle2 size={20}/>} color="#10b981" />
-        <StatCard title="Critical Risks" value={criticalCount} icon={<AlertTriangle size={20}/>} color="#dc2626" />
-        <StatCard title="Mosca Warnings" value={warningCount} icon={<Clock size={20}/>} color="#fbbf24" />
+      {/* Stat strip */}
+      <div className="md:col-span-3 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard title="Total assets" value={safeAssets.length} icon={<Database size={17} />} color="#0B1F3A" />
+        <StatCard title="Stable" value={stableCount} icon={<CheckCircle2 size={17} />} color={RISK_HEX.stable} />
+        <StatCard title="Critical risks" value={criticalCount} icon={<AlertTriangle size={17} />} color={RISK_HEX.critical} />
+        <StatCard title="Mosca warnings" value={warningCount} icon={<Clock size={17} />} color={RISK_HEX.warning} />
       </div>
 
-      <div className="md:col-span-3 glass-card p-6 border-l-4 border-pnb-maroon bg-white/50">
-         <h4 className="text-pnb-maroon font-black text-sm mb-4 flex items-center gap-2">
-           <Activity size={18} /> LIVE THREAT INTELLIGENCE FEED
-         </h4>
-         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      {/* Threat feed */}
+      <div className="glass-card md:col-span-3 overflow-hidden">
+        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3.5">
+          <h3 className="qg-heading flex items-center gap-2">
+            <Activity size={14} className="text-cobalt-600" /> Threat intelligence feed
+          </h3>
+          <span className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-widest text-slate-400">
+            <span className="h-1.5 w-1.5 rounded-full bg-success qg-live-dot" /> Live
+          </span>
+        </div>
+        {intel.length === 0 ? (
+          <p className="py-8 text-center font-mono text-xs text-slate-400">No intelligence items available.</p>
+        ) : (
+          <div className="divide-y divide-slate-100">
             {intel.map((item, idx) => (
-                <IntelItem key={idx} {...item} />
+              <IntelItem key={idx} {...item} />
             ))}
-         </div>
+          </div>
+        )}
       </div>
     </motion.div>
   );
 };
 
 const IntelItem = ({ date, source, title, impact }) => (
-  <div className="border-l-2 border-slate-200 pl-4 hover:border-pnb-gold transition-colors">
-    <div className="flex justify-between items-center mb-1">
-        <span className="text-[10px] font-black text-pnb-maroon uppercase">{source}</span>
-        <span className="text-[9px] text-slate-400 font-bold">{date}</span>
+  <div className="flex items-start gap-3 px-5 py-3 transition-colors hover:bg-slate-50">
+    <span className="mt-0.5 inline-flex h-1.5 w-1.5 shrink-0 rounded-full bg-cobalt-300" />
+    <div className="min-w-0 flex-1">
+      <div className="text-[13px] font-medium leading-snug text-slate-800">{title}</div>
+      <div className="mt-0.5 text-[11px] text-slate-400">Impact: {impact}</div>
     </div>
-    <div className="text-xs font-bold text-slate-700 leading-snug mb-1 line-clamp-2">{title}</div>
-    <div className="text-[9px] text-slate-500 font-medium">IMPACT: {impact}</div>
+    <div className="flex shrink-0 flex-col items-end gap-1">
+      <span className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-wider text-slate-500">
+        {source}
+      </span>
+      <span className="font-mono text-[9px] text-slate-400">{date}</span>
+    </div>
   </div>
 );
 
 const AnalystWarmupPanel = () => (
-  <div className="min-h-[60vh] flex items-center justify-center">
-    <div className="w-full max-w-4xl glass-card border border-slate-200 bg-white/90 shadow-xl overflow-hidden">
-      <div className="bg-pnb-maroon text-white px-6 py-5 border-b-4 border-pnb-gold">
-        <div className="flex items-center gap-3 text-sm font-black uppercase tracking-[0.2em]">
-          <Activity size={18} className="text-pnb-gold animate-spin" />
-          Initializing Analyst Workspace
+  <div className="flex min-h-[55vh] items-center justify-center">
+    <div className="w-full max-w-3xl">
+      <div className="panel-elevated overflow-hidden">
+        <div className="flex items-center gap-3 border-b border-slate-200 bg-slate-50 px-6 py-4">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-cobalt-50 text-cobalt-600">
+            <Activity size={15} />
+          </div>
+          <div>
+            <div className="text-sm font-bold text-navy">Initializing analyst workspace</div>
+            <p className="text-xs text-slate-500">
+              Establishing secure data channels and loading multi-source posture.
+            </p>
+          </div>
         </div>
-        <p className="mt-2 text-xs text-white/75 font-semibold">
-          Establishing secure data channels, loading asset posture, and preparing live intelligence modules.
-        </p>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-6">
-        <InfoTile
-          icon={<Radar size={18} />}
-          title="Start Here"
-          body="Use TRIGGER FULL SCAN to assess a domain such as pnb.bank.in or a target subsidiary endpoint."
-        />
-        <InfoTile
-          icon={<TimerReset size={18} />}
-          title="Typical Runtime"
-          body="Average full scans usually complete in 2 to 5 minutes, depending on discovery depth, open services, and endpoint latency."
-        />
-        <InfoTile
-          icon={<Waypoints size={18} />}
-          title="What Loads"
-          body="The platform prepares asset inventory, MOSCA risk states, PQC readiness, threat intelligence, and migration playbooks."
-        />
-      </div>
-
-      <div className="border-t border-slate-100 px-6 py-4 bg-slate-50 text-[11px] text-slate-600 font-semibold flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
-        <span>Tip: the API Scanner tab is best for targeted endpoint checks after the baseline domain scan completes.</span>
-        <span className="text-pnb-maroon uppercase tracking-widest font-black">Secure session in progress</span>
+        <div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-3">
+          <InfoTile icon={<Radar size={15} />} title="Start here" body="Use TRIGGER NETWORK SCAN to assess a domain, or the Multi-Source scanner for repos, containers and binaries." />
+          <InfoTile icon={<TimerReset size={15} />} title="Typical runtime" body="Full scans usually complete in 2–5 minutes depending on discovery depth and endpoint latency." />
+          <InfoTile icon={<Waypoints size={15} />} title="What loads" body="Asset inventory, Mosca risk states, PQC readiness, threat intelligence and migration playbooks." />
+        </div>
       </div>
     </div>
   </div>
 );
 
 const InfoTile = ({ icon, title, body }) => (
-  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-    <div className="flex items-center gap-2 text-pnb-maroon font-black text-[11px] uppercase tracking-widest">
-      {icon}
+  <div className="rounded-lg border border-slate-200 bg-white p-4">
+    <div className="mb-1.5 flex items-center gap-2 text-[11px] font-semibold text-navy">
+      <span className="text-cobalt-600">{icon}</span>
       {title}
     </div>
-    <p className="mt-3 text-sm leading-relaxed text-slate-600 font-medium">
-      {body}
-    </p>
+    <p className="text-xs leading-relaxed text-slate-500">{body}</p>
   </div>
 );
 
 const StatCard = ({ title, value, icon, color }) => (
-  <div className="glass-card p-4 flex items-center gap-4 hover:-translate-y-1 transition-transform border-b-2" style={{borderBottomColor: color}}>
-    <div className={`p-3 rounded bg-slate-50`} style={{color: color}}>
+  <div className="glass-card flex items-center gap-3.5 px-5 py-4">
+    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-slate-50" style={{ color }}>
       {icon}
     </div>
-    <div>
-      <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{title}</div>
-      <div className="text-2xl font-black text-slate-800">{value}</div>
+    <div className="min-w-0">
+      <div className="qg-label">{title}</div>
+      <div className="font-mono text-2xl font-bold text-navy">{value}</div>
     </div>
   </div>
 );

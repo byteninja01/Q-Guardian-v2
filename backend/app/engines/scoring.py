@@ -3,6 +3,8 @@
 # S3: Balanced
 # S4/S5: Operational (PQC is a bonus, not a requirement)
 
+import re
+
 TIER_CONFIG = {
     "S1": {"tls": 0.25, "fs": 0.20, "hygiene": 0.20, "cipher": 0.15, "pqc": 0.20},
     "S2": {"tls": 0.25, "fs": 0.20, "hygiene": 0.20, "cipher": 0.15, "pqc": 0.20},
@@ -10,6 +12,44 @@ TIER_CONFIG = {
     "S4": {"tls": 0.35, "fs": 0.25, "hygiene": 0.25, "cipher": 0.15, "pqc": 0.00}, # PQC 0 as it's bonus only
     "S5": {"tls": 0.35, "fs": 0.25, "hygiene": 0.25, "cipher": 0.15, "pqc": 0.00},
 }
+
+def _quantum_signal_cap(data: dict):
+    """
+    Q-TRI signal ingestion: cap the score when the real algorithm surface
+    (from Semgrep / Trivy / network) is a quantum-vulnerable legacy family.
+    Returns None when no cap applies.
+    """
+    if data.get("is_pqc"):
+        return None
+    try:
+        nist_level = int(data.get("nist_quantum_security_level") or 0)
+    except (TypeError, ValueError):
+        nist_level = 0
+    if nist_level >= 1:
+        return None
+
+    algo = str(data.get("algorithm", "")).upper()
+    caps = []
+    if re.search(r"MD5", algo):
+        caps.append(20)          # collision + Grover halving
+    if re.search(r"SHA-?1\b", algo):
+        caps.append(35)          # deprecated 80-bit digest
+    if re.search(r"(3DES|\bDES\b|RC4|RC2|BLOWFISH)", algo):
+        caps.append(25)          # 56/64/112-bit symmetric legacy
+    if "ECB" in algo:
+        caps.append(40)          # unsafe mode (no authentication)
+    if re.search(r"RSA-?(512|1024)", algo):
+        caps.append(20)          # classically factorable
+    try:
+        key_size = int(data.get("key_size") or 0)
+    except (TypeError, ValueError):
+        key_size = 0
+    if re.search(r"\bRSA\b", algo) and 0 < key_size < 2048:
+        caps.append(25)
+    if re.search(r"\bDSA\b", algo) and not re.search(r"ECDSA", algo):
+        caps.append(30)          # discrete-log — Shor-vulnerable
+    return min(caps) if caps else None
+
 
 def calculate_qtri_score(data: dict):
     # Determine Tier (Default to S5 if missing)
@@ -50,6 +90,11 @@ def calculate_qtri_score(data: dict):
         (cipher_val * config["cipher"]) +
         (pqc_val * config["pqc"])
     ) * 100
+
+    # Q-TRI signal ingestion: cap on quantum-vulnerable algorithm families
+    cap = _quantum_signal_cap(data)
+    if cap is not None:
+        final_score = min(final_score, cap)
     
     # 🎁 BONUS: For S4/S5, PQC acts as a raw bonus pts provider since it's not in the baseline
     if tier in ("S4", "S5") and pqc_val == 1.0:

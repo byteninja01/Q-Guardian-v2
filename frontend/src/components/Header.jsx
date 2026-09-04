@@ -1,66 +1,90 @@
-import { ShieldCheck, Activity, Terminal, Cpu } from 'lucide-react';
+import { Activity, Search, ShieldCheck } from 'lucide-react';
 
 const Header = ({ onScan, scanning, polling, domain, setDomain, progress, statusMessage }) => {
   return (
-    <div className="fixed top-0 left-0 right-0 z-40 shadow-2xl">
-      <div className="bg-slate-950 h-10 flex items-center justify-between px-6 text-white text-sm font-bold tracking-wider relative overflow-hidden border-b border-slate-800">
-        <div className="absolute inset-0 opacity-10 bg-[linear-gradient(rgba(255,255,255,0.2)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.2)_1px,transparent_1px)] bg-[size:20px_20px]"></div>
-        
-        <div className="flex items-center gap-4 relative z-10">
-          <span className="flex items-center gap-1.5 text-indigo-400 font-extrabold"><ShieldCheck size={18} /> Q-GUARDIAN ENTERPRISE</span>
-          <span className="opacity-70 px-4 border-l border-slate-700 hidden sm:block text-slate-300 text-xs">POST-QUANTUM CBOM & RISK AUDIT PLATFORM</span>
-        </div>
-        <div className="hidden md:flex gap-4 relative z-10 items-center text-xs">
-            {polling && <span className="flex items-center gap-2 text-cyan-400 font-mono text-[10px] animate-pulse"><Activity size={14}/> LIVE RUNTIME MONITORING</span>}
-            <span className="text-slate-400 font-mono">v2.0 CYCLONEDX-NATIVE</span>
-        </div>
-      </div>
-      <div className="bg-slate-900/95 backdrop-blur-md h-16 flex items-center justify-between px-6 border-b border-slate-800">
-        <div className="flex items-center gap-3">
-            <div className="p-2 rounded-xl bg-indigo-600/20 border border-indigo-500/30 text-cyan-400 shadow-inner">
-                <Cpu size={22} className="animate-pulse" />
+    <div className="fixed top-0 left-0 right-0 z-40">
+      <div className="border-b border-slate-200 bg-white">
+        <div className="mx-auto flex h-20 w-full max-w-[1500px] items-center justify-between gap-4 px-4 sm:px-6">
+          {/* Brand */}
+          <div className="flex min-w-0 items-center gap-3">
+            <img
+              src="/brand/q-guardian-logo.png"
+              alt="Q-Guardian"
+              className="h-10 w-auto shrink-0 object-contain drop-shadow-[0_1px_2px_rgba(11,31,58,0.25)]"
+              draggable="false"
+            />
+            <div className="min-w-0 leading-tight">
+              <div className="font-display text-[17px] tracking-wide text-navy">
+                Q-GUARDIAN
+              </div>
+              <div className="hidden text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-400 md:block">
+                Post-Quantum CBOM · Risk Audit Platform
+              </div>
             </div>
-            <span className="text-white font-black text-2xl tracking-tighter flex items-center gap-2 font-mono">
-                Q-GUARDIAN<span className="w-2.5 h-2.5 rounded-full bg-cyan-400 inline-block animate-pulse shadow-[0_0_12px_#06B6D4]"></span>
+            <span className="hidden rounded border border-cobalt-100 bg-cobalt-50 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-cobalt-700 md:inline-flex items-center gap-1">
+              v2.0 · CycloneDX 1.6
             </span>
-        </div>
-        <div className="flex items-center gap-3">
-          <input 
-            type="text" 
-            placeholder="Enter Target Asset / Domain (e.g. app.corp.internal)" 
-            className="px-4 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 w-64 sm:w-80 transition-all font-mono placeholder:text-slate-500 placeholder:font-sans"
-            value={domain}
-            onChange={(e) => setDomain(e.target.value)}
-          />
-          <button 
-            onClick={onScan}
-            disabled={scanning || !domain}
-            className={`qg-button text-xs py-2 px-6 flex items-center gap-2 ${scanning ? 'opacity-70 cursor-not-allowed' : ''}`}
-          >
-            {scanning ? (
-                <><Activity size={14} className="animate-spin" /> SCANNING...</>
-            ) : (
-                <><ShieldCheck size={14} /> TRIGGER NETWORK SCAN</>
-            )}
-          </button>
-        </div>
-      </div>
-      
-      {/* Scan Progress Bar */}
-      {scanning && (
-          <div className="h-2 w-full bg-slate-950 overflow-hidden relative border-t border-slate-800 flex items-center">
-              <div 
-                className="absolute top-0 bottom-0 left-0 bg-gradient-to-r from-indigo-600 via-cyan-500 to-emerald-400 transition-all duration-500 ease-out z-10" 
-                style={{width: `${progress || 0}%`}}
-              >
-                  <div className="absolute inset-0 bg-[linear-gradient(45deg,rgba(255,255,255,0.2)_25%,transparent_25%,transparent_50%,rgba(255,255,255,0.2)_50%,rgba(255,255,255,0.2)_75%,transparent_75%,transparent)] bg-[size:20px_20px] animate-[progress_2s_linear_infinite]"></div>
-              </div>
-              <div className="truncate text-[9px] font-black uppercase tracking-widest text-slate-300 px-6 z-20 flex items-center gap-2">
-                  <Activity size={10} className="animate-spin text-cyan-400" />
-                  {statusMessage || "Initializing Engine..."} ({progress || 0}%)
-              </div>
           </div>
-      )}
+
+          {/* Scan controls */}
+          <div className="flex items-center gap-2.5">
+            {polling && (
+              <span className="hidden items-center gap-1.5 text-[10px] font-semibold uppercase tracking-widest text-slate-500 xl:flex">
+                <span className="h-1.5 w-1.5 rounded-full bg-success qg-live-dot" />
+                Live monitoring
+              </span>
+            )}
+
+            <div className="relative hidden sm:block">
+              <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Target domain, e.g. example.com"
+                className="w-64 rounded-lg border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 font-mono text-xs text-navy placeholder:font-sans placeholder:text-slate-400 transition-colors focus:border-cobalt-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-cobalt-200 lg:w-80"
+                value={domain}
+                onChange={(e) => setDomain(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && !scanning && onScan?.()}
+              />
+            </div>
+
+            <button
+              onClick={onScan}
+              disabled={scanning || !domain}
+              className="qg-button whitespace-nowrap"
+            >
+              {scanning ? (
+                <>
+                  <Activity size={14} className="animate-spin" /> Scanning…
+                </>
+              ) : (
+                <>
+                  <ShieldCheck size={14} /> Trigger network scan
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Scan progress */}
+        {scanning && (
+          <div className="border-t border-slate-100">
+            <div className="mx-auto flex w-full max-w-[1500px] items-center gap-3 px-6 py-2">
+              <div className="h-1 w-full max-w-sm overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className="h-full rounded-full bg-cobalt-600 transition-all duration-500 ease-out"
+                  style={{ width: `${Math.max(progress || 0, 4)}%` }}
+                />
+              </div>
+              <span className="truncate font-mono text-[11px] text-slate-500">
+                {statusMessage || 'Initializing engines…'}
+              </span>
+              <span className="ml-auto shrink-0 font-mono text-[11px] font-semibold text-cobalt-700">
+                {Math.round(progress || 0)}%
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 };

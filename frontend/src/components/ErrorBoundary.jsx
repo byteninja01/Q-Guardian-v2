@@ -35,7 +35,7 @@ class ErrorBoundary extends Component {
             </details>
             <button 
               onClick={() => window.location.reload()} 
-              className="mt-6 bg-pnb-maroon text-white font-black uppercase py-2 px-8 rounded hover:bg-pnb-gold transition-colors text-sm"
+              className="mt-6 bg-cobalt-600 text-white font-bold uppercase py-2 px-8 rounded hover:bg-cobalt-700 transition-colors text-sm"
             >
               Reset Platform
             </button>

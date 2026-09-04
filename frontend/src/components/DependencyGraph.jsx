@@ -1,5 +1,66 @@
 import React, { useMemo, useRef, useCallback } from 'react';
 import ForceGraph2D from 'react-force-graph-2d';
+import { FileCode, Cpu, Package, Wifi, GitCompare, ShieldAlert } from 'lucide-react';
+
+// Source-type palette — mirrors AssetTable source badges so the graph reads
+// the same as the inventory: static / binary / container / network.
+const SOURCE_COLOR = {
+  'static-source': '#4F7DE2', // cobalt-400 — semgrep
+  static_code: '#1D48B0',     // cobalt-700 — AST
+  binary: '#F59E0B',          // amber — LIEF
+  container: '#0EA5E9',       // sky — trivy/syft
+  cloud_kms: '#168A68',       // success — KMS
+  network_live: '#0B1F3A',    // navy — live TLS
+};
+const DEFAULT_SOURCE_COLOR = '#98A2B3';
+
+const MAX_LABEL = 24;
+
+// Raw asset hostnames are structured per discovery source, e.g.
+//   src:sample_target.py:7                 container:cryptography:41.0.7
+//   bin:demo_pqc_target.bin:ML-KEM-768-NTT gateway.example.com
+// Derive a short, meaningful on-canvas label per source:
+//   src → FILE.PY:LINE   container → PKG:VER   bin → SYMBOL   else → host.
+const shortLabel = (raw) => {
+  let s = String(raw || '').trim();
+  const parts = s.split(':');
+  const kind = (parts[0] || '').toLowerCase();
+  if (kind === 'src' && parts.length >= 3) {
+    // file + line — keep the basename and line number
+    const file = (parts[1] || '').split(/[\\/]/).pop();
+    s = parts[2] ? `${file}:${parts[2]}` : file;
+  } else if (kind === 'container' && parts.length >= 3) {
+    // package + version
+    s = parts[2] ? `${parts[1]}:${parts[2]}` : parts[1];
+  } else if (kind === 'bin' && parts.length >= 2) {
+    // the interesting bit is the trailing constant/symbol name
+    s = parts[parts.length - 1] || parts[1];
+  } else {
+    s = parts.join(':');
+  }
+  s = s.toUpperCase();
+  return s.length > MAX_LABEL ? `${s.slice(0, MAX_LABEL - 1).trimEnd()}…` : s;
+};
+
+const sourceColorOf = (sourceType) =>
+  SOURCE_COLOR[(sourceType || '').toLowerCase()] || DEFAULT_SOURCE_COLOR;
+
+const sourceLabelOf = (sourceType) =>
+  ({
+    'static-source': 'SEMGREP',
+    static_code: 'AST',
+    binary: 'BINARY',
+    container: 'CONTAINER',
+    cloud_kms: 'KMS',
+    network_live: 'LIVE TLS',
+  }[(sourceType || '').toLowerCase()] || 'OTHER');
+
+const LEGEND = [
+  ['network_live', Wifi, 'LIVE TLS ENDPOINT'],
+  ['static-source', FileCode, 'SEMGREP SOURCE'],
+  ['binary', Cpu, 'BINARY (LIEF)'],
+  ['container', Package, 'CONTAINER IMAGE'],
+];
 
 const DependencyGraph = ({ assets }) => {
   const fgRef = useRef();
@@ -7,62 +68,78 @@ const DependencyGraph = ({ assets }) => {
   const graphData = useMemo(() => {
     const nodes = [];
     const links = [];
-    const cas = new Set();
     const algos = new Set();
+    const divergent = (Array.isArray(assets) ? assets : []).filter((a) => !!a.divergence_flag);
 
-    (Array.isArray(assets) ? assets : []).forEach(asset => {
+    (Array.isArray(assets) ? assets : []).forEach((asset) => {
       const hostname = asset?.hostname || `unknown-${nodes.length}`;
       const risk = asset?.mosca?.risk_state || 'UNKNOWN';
       const algorithm = asset?.algorithm || 'Unknown Algorithm';
-      // Asset Node
-      nodes.push({ 
-        id: hostname, 
-        name: hostname.toUpperCase(), 
-        val: 4, 
-        color: risk === 'CRITICAL' ? '#dc2626' : '#A20C39',
+      const sourceType = asset?.source_type;
+
+      // Asset node — colored by discovery source; critical live-TLS is red.
+      nodes.push({
+        id: hostname,
+        name: shortLabel(hostname),
+        title: hostname,
+        val: 6,
+        color:
+          risk === 'CRITICAL' && sourceType === 'network_live'
+            ? '#D92D20'
+            : sourceColorOf(sourceType),
         type: 'asset',
-        risk
+        sourceType,
+        sourceLabel: sourceLabelOf(sourceType),
+        risk,
+        divergent: !!asset.divergence_flag,
+        divergenceFlag: asset.divergence_flag || null,
       });
 
-      // Algorithm Node
+      // Algorithm node
       if (!algos.has(algorithm)) {
         algos.add(algorithm);
-        nodes.push({ 
-          id: algorithm, 
-          name: algorithm, 
-          val: 7, 
-          color: '#FBBC09',
-          type: 'algo'
+        nodes.push({
+          id: algorithm,
+          name: algorithm,
+          title: algorithm,
+          val: 8,
+          color: '#C6A15B',
+          type: 'algo',
         });
       }
-      links.push({ source: hostname, target: algorithm, value: 2 });
-
-      // CA Node
-      const domainParts = hostname.split('.');
-      const baseDomain = domainParts.length > 2 ? domainParts.slice(-2).join('.').toUpperCase() : hostname.toUpperCase();
-      const ca = `ROOT-CA (${baseDomain})`;
-      if (!cas.has(ca)) {
-        cas.add(ca);
-        nodes.push({ 
-          id: ca, 
-          name: ca, 
-          val: 10, 
-          color: '#1e293b',
-          type: 'ca'
-        });
-      }
-      links.push({ source: hostname, target: ca, value: 5 });
+      links.push({ source: hostname, target: algorithm, value: 2, kind: 'uses' });
     });
+
+    // Divergence hub: every flagged asset gets an amber edge to one node so
+    // "declared vs actual" drift is visible at a glance.
+    if (divergent.length > 0) {
+      nodes.push({
+        id: '__divergence_hub__',
+        name: `${divergent.length} DECLARED-vs-ACTUAL`,
+        title: `${divergent.length} asset(s) flagged — declared spec differs from detected crypto`,
+        val: 12,
+        color: '#D99000',
+        type: 'divergence',
+      });
+      divergent.forEach((a) => {
+        links.push({
+          source: a.hostname,
+          target: '__divergence_hub__',
+          value: 4,
+          kind: 'divergence',
+          flag: a.divergence_flag,
+        });
+      });
+    }
 
     return { nodes, links };
   }, [assets]);
 
   const paintNode = useCallback((node, ctx, globalScale) => {
     const label = node.name;
-    const fontSize = 12 / globalScale;
-    ctx.font = `${fontSize}px "Orbitron", sans-serif`;
-    const textWidth = ctx.measureText(label).width;
-    const bckgDimensions = [textWidth, fontSize].map(n => n + fontSize * 0.2);
+    const fontSize = 11 / globalScale;
+    ctx.font = `600 ${fontSize}px "Inter", sans-serif`;
+    const labelY = node.y + node.val + fontSize * 0.5 + 4 / globalScale;
 
     // Node shape
     ctx.beginPath();
@@ -70,78 +147,145 @@ const DependencyGraph = ({ assets }) => {
     ctx.fillStyle = node.color;
     ctx.fill();
 
-    // Glow Effect for Critical
-    if (node.risk === 'CRITICAL') {
-        ctx.shadowBlur = 15;
-        ctx.shadowColor = 'rgba(255, 77, 77, 0.8)';
-        ctx.strokeStyle = '#ff4d4d';
-        ctx.lineWidth = 1;
-        ctx.stroke();
-        ctx.shadowBlur = 0;
+    // Red ring for CRITICAL live-TLS assets
+    if (node.risk === 'CRITICAL' && node.sourceType === 'network_live') {
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, node.val + 2.5, 0, 2 * Math.PI, false);
+      ctx.strokeStyle = '#D92D20';
+      ctx.lineWidth = 2 / globalScale + 1;
+      ctx.stroke();
     }
 
-    // Text Label
+    // Amber ring for divergent (declared vs actual) assets
+    if (node.divergent) {
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, node.val + 2.5, 0, 2 * Math.PI, false);
+      ctx.strokeStyle = '#D99000';
+      ctx.lineWidth = 2 / globalScale + 1;
+      ctx.stroke();
+    }
+
+    // Label with a light halo so text stays readable over edges
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#1e293b';
-    ctx.fillText(label, node.x, node.y + node.val + fontSize);
+    ctx.font = `600 ${fontSize}px "Inter", sans-serif`;
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    const w = ctx.measureText(label).width;
+    ctx.fillRect(node.x - w / 2 - 4 / globalScale, labelY - fontSize / 2 - 2 / globalScale, w + 8 / globalScale, fontSize + 4 / globalScale);
+    ctx.fillStyle = '#344054';
+    ctx.fillText(label, node.x, labelY);
   }, []);
 
   React.useEffect(() => {
     if (fgRef.current) {
-        fgRef.current.d3Force('charge').strength(-300);
-        fgRef.current.d3Force('link').distance(150);
-        fgRef.current.d3Force('center').strength(0.05);
+      fgRef.current.d3Force('charge').strength(-450);
+      fgRef.current.d3Force('link').distance(175);
+      fgRef.current.d3Force('center').strength(0.06);
+      // Nodes need enough time to separate before the layout freezes.
+      fgRef.current.d3ReheatSimulation();
     }
   }, [graphData]);
 
+  const divergentCount = (Array.isArray(assets) ? assets : []).filter((a) => !!a.divergence_flag).length;
+
   return (
-    <div className="glass-card p-0 h-[600px] overflow-hidden relative border-2 border-pnb-maroon/20 bg-white shadow-2xl">
-      <div className="absolute top-6 left-8 z-20 pointer-events-none">
-        <h3 className="text-pnb-maroon font-black text-lg tracking-widest flex items-center gap-3">
-            <span className="w-2 h-8 bg-pnb-maroon inline-block"></span>
+    <div className="glass-card bg-white h-[calc(100dvh-250px)] min-h-[520px] flex flex-col overflow-hidden border border-slate-200">
+      {/* Header strip — own lane, never over the canvas */}
+      <div className="flex items-center justify-between px-6 py-3 border-b border-slate-200 shrink-0">
+        <div>
+          <h3 className="text-slate-900 font-bold text-[15px] tracking-tight flex items-center gap-3">
+            <span className="w-1 h-6 bg-cobalt-600 inline-block rounded-full" />
             CRYPTO DEPENDENCY GRAPH
-        </h3>
-        <p className="text-[10px] text-slate-500 font-bold uppercase mt-1 tracking-widest opacity-80">
-            PLATFORM ASSET & AUTHORITY TOPOLOGY
-        </p>
-      </div>
-      
-      <div className="absolute bottom-8 right-8 z-20 flex flex-col gap-3 glass-card p-4 bg-white/80 border-slate-200">
-         <div className="flex items-center gap-3 text-[10px] font-black text-slate-700">
-            <div className="w-3 h-3 rounded-full bg-pnb-maroon shadow-[0_0_10px_rgba(162,12,57,0.3)]" /> PROTECTED ASSET
-         </div>
-         <div className="flex items-center gap-3 text-[10px] font-black text-slate-700">
-            <div className="w-3 h-3 rounded-full bg-red-600 shadow-[0_0_10px_rgba(220,38,38,0.3)]" /> CRITICAL RISK
-         </div>
-         <div className="flex items-center gap-3 text-[10px] font-black text-slate-700">
-            <div className="w-3 h-3 rounded-full bg-pnb-gold shadow-[0_0_10px_rgba(251,188,9,0.3)]" /> CIPHER ALGO
-         </div>
-         <div className="flex items-center gap-3 text-[10px] font-black text-slate-700">
-            <div className="w-3 h-3 rounded-full bg-slate-800 shadow-[0_0_10px_rgba(30,41,59,0.3)]" /> ROOT AUTHORITY
-         </div>
+          </h3>
+          <p className="text-[9px] text-slate-400 font-bold uppercase mt-0.5 tracking-widest ml-4">
+            MULTI-SOURCE TOPOLOGY · COLORED BY DISCOVERY VECTOR · DRAG TO PANNING · SCROLL TO ZOOM
+          </p>
+        </div>
+        {divergentCount > 0 && (
+          <div className="hidden md:flex items-center gap-1.5 text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-300 rounded px-2 py-1">
+            <ShieldAlert size={12} />
+            {divergentCount} DECLARED-vs-ACTUAL DRIFT
+          </div>
+        )}
       </div>
 
-      <ForceGraph2D
-        ref={fgRef}
-        graphData={graphData}
-        nodeCanvasObject={paintNode}
-        nodePointerAreaPaint={(node, color, ctx) => {
-            ctx.fillStyle = color;
-            ctx.beginPath();
-            ctx.arc(node.x, node.y, node.val, 0, 2 * Math.PI, false);
-            ctx.fill();
-        }}
-        linkDirectionalParticles={4}
-        linkDirectionalParticleSpeed={0.002}
-        linkCurvature={0.25}
-        linkColor={() => 'rgba(0,0,0,0.1)'}
-        backgroundColor="#ffffff"
-        cooldownTicks={100}
-        d3AlphaDecay={0.02}
-        d3VelocityDecay={0.3}
-        onEngineStop={() => fgRef.current.zoomToFit(400)}
-      />
+      <div className="flex-1 flex min-h-0">
+        {/* Canvas lane */}
+        <div className="flex-1 min-w-0 relative">
+          <ForceGraph2D
+            ref={fgRef}
+            graphData={graphData}
+            nodeCanvasObject={paintNode}
+            nodePointerAreaPaint={(node, color, ctx) => {
+              ctx.fillStyle = color;
+              ctx.beginPath();
+              ctx.arc(node.x, node.y, node.val, 0, 2 * Math.PI, false);
+              ctx.fill();
+            }}
+            linkDirectionalParticles={2}
+            linkDirectionalParticleSpeed={0.002}
+            linkCurvature={0.25}
+            linkColor={(link) =>
+              link.kind === 'divergence' ? 'rgba(217, 144, 0, 0.9)' : 'rgba(152,162,179,0.35)'
+            }
+            linkWidth={(link) => (link.kind === 'divergence' ? 2 : 1)}
+            backgroundColor="#ffffff"
+            nodeRelSize={5}
+            cooldownTicks={300}
+            d3AlphaDecay={0.02}
+            d3VelocityDecay={0.32}
+            onEngineStop={() => {
+              if (fgRef.current) fgRef.current.zoomToFit(400, 70);
+            }}
+          />
+        </div>
+
+        {/* Legend lane — desktop: vertical panel to the right */}
+        <div className="hidden lg:flex flex-col justify-center w-[235px] shrink-0 border-l border-slate-200 px-5 py-6 gap-4 bg-slate-50/60 overflow-y-auto">
+          <div>
+            <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-2">Source vectors</div>
+            {LEGEND.map(([key, Icon, label]) => (
+              <div key={key} className="flex items-center gap-2 text-[10px] font-bold text-slate-600 py-1">
+                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: SOURCE_COLOR[key] }} />
+                <Icon size={11} className="text-slate-400 shrink-0" />
+                <span className="truncate">{label}</span>
+              </div>
+            ))}
+          </div>
+          <div>
+            <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-2">Risk markers</div>
+            <div className="flex items-center gap-2 text-[10px] font-bold text-slate-600 py-0.5">
+              <span className="w-2.5 h-2.5 rounded-full shrink-0 bg-critical ring-2 ring-red-200" /> CRITICAL LIVE TLS
+            </div>
+            <div className="flex items-center gap-2 text-[10px] font-bold text-slate-600 py-0.5">
+              <span className="w-2.5 h-2.5 rounded-full shrink-0 bg-amber-500" /> DIVERGENCE HUB ({divergentCount})
+            </div>
+            <div className="flex items-center gap-2 text-[10px] font-bold text-slate-600 py-0.5">
+              <span className="w-2.5 h-2.5 rounded-full shrink-0 bg-[#C6A15B]" /> CRYPTO PRIMITIVE
+            </div>
+          </div>
+          <div className="border-t border-slate-200 pt-3">
+            <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Declared vs actual</div>
+            <p className="text-[10px] leading-relaxed text-slate-500">
+              Amber edges link an asset to this hub when its declared spec drifts from what the scanner actually found.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Legend — mobile/tablet: horizontal strip under the canvas */}
+      <div className="lg:hidden shrink-0 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-slate-200 px-5 py-2">
+        {LEGEND.map(([key, Icon, label]) => (
+          <span key={key} className="flex items-center gap-1.5 text-[9px] font-bold text-slate-500">
+            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: SOURCE_COLOR[key] }} />
+            {label}
+          </span>
+        ))}
+        <span className="flex items-center gap-1.5 text-[9px] font-bold text-slate-500">
+          <GitCompare size={10} className="text-amber-500" />
+          <span className="w-4 border-t-2 border-amber-500 inline-block" /> DIVERGENCE
+        </span>
+      </div>
     </div>
   );
 };

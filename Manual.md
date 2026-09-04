@@ -2,7 +2,7 @@
 
 ## 1. Introduction
 
-Q-Guardian is an enterprise-grade Quantum Transition Intelligence platform designed for the banking sector (specifically tailored for Punjab National Bank contexts). Its primary objective is to inventory, analyze, and map a bank's cryptographic landscape to prepare for Post-Quantum Cryptography (PQC) migration.
+Q-Guardian is an enterprise-grade Quantum Transition Intelligence platform designed for the banking and regulated-finance sector. Its primary objective is to inventory, analyze, and map an organisation's cryptographic landscape to prepare for Post-Quantum Cryptography (PQC) migration.
 
 The platform provides a holistic view of the cryptographic attack surface through passive infrastructure discovery, active API penetration testing, and theoretical risk modeling (Mosca and HNDL timelines).
 
@@ -21,7 +21,7 @@ Q-Guardian operates as a decoupled full-stack application.
 
 ### 2.2 Frontend (React / Vite)
 - **Framework**: React 18 using a Single Page Application (SPA) architecture.
-- **Styling**: TailwindCSS configured with a specific PNB color palette.
+- **Styling**: TailwindCSS configured with a specific enterprise color palette.
 - **State Management**: React Hooks (`useState`, `useEffect`, `useContext`).
 - **Visualization**: Recharts for statistical graphs and `react-force-graph-2d` for cryptographic topology mapping.
 

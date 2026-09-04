@@ -177,6 +177,84 @@ def _evaluate_container_package(pkg_name: str, version: str, location: str = "")
         "recommendation": rec
     }
 
+def scan_with_trivy_cli(target: str) -> Optional[List[Dict[str, Any]]]:
+    """
+    Execute AquaSecurity Trivy (preferred SBOM engine) and map every
+    discovered package/version through the quantum-readiness lookup table.
+
+    Command selection:
+      - local path (dir / Dockerfile / lockfile / tar) -> `trivy fs`
+      - image reference (e.g. nginx:1.24, alpine@sha256:...)  -> `trivy image`
+
+    Output parsing: prefers native `--format json` (full vuln+package data);
+    falls back to `--format cyclonedx` which needs no vulnerability DB and
+    therefore works fully offline.
+    """
+    # Portable copy under backend/.tools takes priority (no PATH install needed)
+    local_trivy = os.path.join(os.path.dirname(__file__), "..", "..", ".tools", "trivy", "trivy.exe")
+    trivy_bin = None
+    if os.path.exists(local_trivy):
+        trivy_bin = os.path.abspath(local_trivy)
+    else:
+        trivy_bin = shutil.which("trivy")
+    if not trivy_bin:
+        return None
+
+    is_path = os.path.exists(target)
+    subcmd = "fs" if is_path else "image"
+
+    # TRIVY_SKIP_DB_UPDATE keeps scans deterministic and offline-safe. The
+    # native JSON (vuln) path only works once a DB has been seeded with
+    # `trivy --download-db-only`; the CycloneDX SBOM path needs no DB at all.
+    env = {**os.environ, "TRIVY_SKIP_DB_UPDATE": "1"}
+
+    def _run(fmt: str) -> Optional[object]:
+        cmd = [trivy_bin, subcmd, "--quiet", "--format", fmt]
+        if not is_path:
+            cmd += ["--scanners", "vuln"]  # image mode requires an explicit scanner
+        cmd.append(target)
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=90, env=env)
+            if res.returncode != 0:
+                return None
+            return json.loads(res.stdout)
+        except Exception:
+            return None
+
+    findings = []
+
+    # 1) Native JSON (richest: packages + install locations; needs seeded DB)
+    data = _run("json")
+    if isinstance(data, list):
+        for result in data:
+            for pkg in result.get("Packages", []) or []:
+                name = pkg.get("Name", "")
+                version = pkg.get("Version", "")
+                locations = pkg.get("Locations", []) or []
+                loc = locations[0].get("Path", "") if locations else (result.get("Target", "") or target)
+                finding = _evaluate_container_package(name, version, loc)
+                if finding:
+                    findings.append(finding)
+        if findings:
+            return findings
+
+    # 2) CycloneDX SBOM (DB-free, fully offline)
+    data = _run("cyclonedx")
+    if isinstance(data, dict):
+        for comp in data.get("components", []) or []:
+            name = comp.get("name", "")
+            version = comp.get("version", "")
+            purl = comp.get("purl", "")
+            loc = f"{target}:{purl}" if purl else target
+            finding = _evaluate_container_package(name, version, loc)
+            if finding:
+                findings.append(finding)
+        if findings:
+            return findings
+
+    return None
+
+
 def scan_with_syft_cli(target: str) -> Optional[List[Dict[str, Any]]]:
     """Execute syft CLI and parse JSON output."""
     syft_path = shutil.which("syft")
@@ -286,10 +364,15 @@ def _derive_base_image_crypto(image_tag: str, ref_file: str, line_no: int) -> Li
 
 def scan_container(target: str) -> List[Dict[str, Any]]:
     """
-    Main entrypoint for container scanning.
-    Tries syft CLI first; falls back to container heuristics engine.
+    Main entrypoint for container / manifest scanning.
+    Scanner priority: Trivy (json -> cyclonedx) -> Syft -> heuristics engine.
     """
+    results = scan_with_trivy_cli(target)
+    if results is not None and len(results) > 0:
+        return results
+
     results = scan_with_syft_cli(target)
     if results is not None and len(results) > 0:
         return results
+
     return scan_container_heuristic(target)

@@ -1,4 +1,5 @@
 import math
+import re
 
 # Mosca countdown logic
 # X + Y > Z (Threat exists)
@@ -21,32 +22,65 @@ CRQC_TIMELINE_YEARS = {
 
 def derive_migration_complexity(asset: dict) -> float:
     """
-    Derives migration complexity (X) based on actual asset properties.
+    Derives migration complexity (X) from the REAL algorithm / key-size /
+    primitive surface surfaced by any scanner family (network-tls,
+    static-source, container-image, binary).
     Returns a value between 0.5 and 4.0 years.
     """
     complexity = 0.5  # Base minimum
-    
-    algo = asset.get("algorithm", "").upper()
+
+    algo = str(asset.get("algorithm", "")).upper()
+    primitive = str(asset.get("primitive", "")).lower()
+    try:
+        key_size = int(asset.get("key_size") or 0)
+    except (TypeError, ValueError):
+        key_size = 0
+    try:
+        nist_level = int(asset.get("nist_quantum_security_level") or 0)
+    except (TypeError, ValueError):
+        nist_level = 0
+
+    # Assets already PQC-deployed (or actively migrating) shrink X to the floor.
+    if asset.get("is_pqc") or nist_level >= 1:
+        return 0.5
+
+    # ── Weak / legacy hash families (MD5, SHA-1) ──
+    if "MD5" in algo or "SHA-1" in algo or re.search(r"\bSHA1\b", algo):
+        complexity += 0.75
+    elif primitive == "hash":
+        complexity += 0.5
+
+    # ── Legacy symmetric ciphers (DES/3DES/RC4) and unsafe modes (ECB) ──
+    if re.search(r"(DES|3DES|RC4|RC2|BLOWFISH)", algo):
+        complexity += 1.25
+    elif "ECB" in algo:
+        complexity += 0.75
+
+    # ── Public-key families — key size matters for RSA/DSA ──
     if "RSA" in algo:
         complexity += 1.0
-        if asset.get("key_size", 0) >= 4096:
-            complexity += 0.5
+        if 0 < key_size < 2048:
+            complexity += 0.75
+        elif key_size >= 4096:
+            complexity += 0.25
+    elif re.search(r"\bDSA\b", algo) and "ECDSA" not in algo:
+        complexity += 1.25
     elif "ECDSA" in algo:
-        complexity += 0.25
-        
+        complexity += 0.5
+
     tls_ver = str(asset.get("tls_version", ""))
     if tls_ver in ("1.0", "1.1"):
         complexity += 1.0
     elif tls_ver == "1.2":
         complexity += 0.5
-        
+
     tier = asset.get("sensitivity_tier", "S5")
     if tier in ("S1", "S2"):
         complexity += 0.75
-        
+
     if not asset.get("forward_secrecy", True):
         complexity += 0.5
-        
+
     return min(max(complexity, 0.5), 4.0)
 
 def calculate_mosca_clocks(migration_complexity: float, sensitivity_tier: str):
