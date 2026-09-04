@@ -20,6 +20,11 @@ from app.auth import (
 
 # Import Engines
 from app.engines.static_analysis import scan_file_static, scan_directory_static
+from app.engines.container_scanner import scan_container
+from app.engines.binary_scanner import scan_binary
+from app.engines.sample_binary import generate_sample_crypto_binary
+from app.engines.source_scanner import scan_semgrep
+from app.engines.reconciler import reconcile_assets
 from app.engines.discovery import run_discovery, scan_asset
 from app.engines.mosca import calculate_mosca_clocks, derive_migration_complexity
 from app.engines.scoring import calculate_qtri_score, calculate_cyber_rating
@@ -336,8 +341,20 @@ class SourceScanRequest(BaseModel):
     target_path: str          # Absolute or relative path to a file or directory
     job_label: Optional[str] = None
 
-def _save_static_assets_to_db(assets: list, job_uuid: str):
-    """Persist static-scan assets into DB using the unified Phase-1 multi-source schema."""
+class SemgrepScanRequest(BaseModel):
+    target_path: str
+    job_label: Optional[str] = None
+
+class ContainerScanRequest(BaseModel):
+    image_or_path: str        # Container image tag, tarball, or Dockerfile path
+    job_label: Optional[str] = None
+
+class BinaryScanRequest(BaseModel):
+    filepath: str             # Path to ELF/PE/Mach-O binary (or 'SAMPLE' for demo)
+    job_label: Optional[str] = None
+
+def _save_discovered_assets_to_db(assets: list, job_uuid: str):
+    """Persist multi-source discovered assets into DB using the unified schema."""
     with Session(engine) as session:
         for a in assets:
             mosca = {
@@ -363,15 +380,22 @@ def _save_static_assets_to_db(assets: list, job_uuid: str):
                 asset_type=a.get("asset_type", "library"),
                 evidence_file=a.get("evidence_file"),
                 evidence_line=a.get("evidence_line"),
+                evidence_offset=a.get("evidence_offset"),
                 evidence_function=a.get("evidence_function"),
                 primitive=a.get("primitive", "unknown"),
+                mode=a.get("mode"),
+                parameter_set_identifier=a.get("parameter_set_identifier"),
                 classical_security_level=a.get("classical_security_level", 0),
                 nist_quantum_security_level=a.get("nist_quantum_security_level", 0),
+                oid=a.get("oid"),
+                divergence_flag=a.get("divergence_flag"),
                 mosca_data=json.dumps(mosca),
                 last_scanned=datetime.now().isoformat()
             )
             session.add(db_asset)
         session.commit()
+
+_save_static_assets_to_db = _save_discovered_assets_to_db
 
 @app.post("/api/v1/scan/source", tags=["Scan"])
 async def scan_source(
@@ -395,8 +419,7 @@ async def scan_source(
         raise HTTPException(status_code=404, detail=f"Path not found: {target}")
 
     job_uuid = str(uuid.uuid4())
-    _save_static_assets_to_db(assets, job_uuid)
-
+    _save_discovered_assets_to_db(assets, job_uuid)
     cbom = CBOMGenerator.generate_json(assets)
 
     return {
@@ -417,6 +440,156 @@ async def scan_source(
                 "recommendation": a.get("recommendation", "")
             }
             for a in assets
+        ]
+    }
+
+@app.post("/api/v1/scan/semgrep", tags=["Scan"])
+async def scan_semgrep_endpoint(
+    req: SemgrepScanRequest,
+    session: Session = Depends(get_session),
+    current_user: dict = Depends(verify_token)  # 🔒 Protected
+):
+    """Industrial Semgrep rule scanner based on OWASP crypto ruleset (rules/crypto.yml)."""
+    target = req.target_path.strip()
+    if target.startswith(("http://", "https://", "//")):
+        raise HTTPException(status_code=400, detail="Remote URLs not supported. Provide a local path.")
+
+    import os
+    if not os.path.exists(target):
+        raise HTTPException(status_code=404, detail=f"Path not found: {target}")
+
+    assets = scan_semgrep(target)
+    job_uuid = str(uuid.uuid4())
+    _save_discovered_assets_to_db(assets, job_uuid)
+    cbom = CBOMGenerator.generate_json(assets)
+
+    return {
+        "status": "completed",
+        "job_id": job_uuid,
+        "scan_type": "static-source",
+        "target": target,
+        "assets_found": len(assets),
+        "cbom_spec_version": cbom.get("specVersion", "1.6"),
+        "findings_summary": [
+            {
+                "hostname": a["hostname"],
+                "algorithm": a["algorithm"],
+                "rule_id": a.get("evidence_function", ""),
+                "file": a.get("evidence_file"),
+                "line": a.get("evidence_line"),
+                "qtri_score": a["qtri_score"],
+                "recommendation": a.get("recommendation", "")
+            }
+            for a in assets
+        ]
+    }
+
+@app.post("/api/v1/scan/container", tags=["Scan"])
+async def scan_container_endpoint(
+    req: ContainerScanRequest,
+    session: Session = Depends(get_session),
+    current_user: dict = Depends(verify_token)  # 🔒 Protected
+):
+    """Container image scanner using Syft or deep container layer heuristic inspection."""
+    target = req.image_or_path.strip()
+    if not target:
+        raise HTTPException(status_code=400, detail="Image tag or path is required.")
+
+    assets = scan_container(target)
+    job_uuid = str(uuid.uuid4())
+    _save_discovered_assets_to_db(assets, job_uuid)
+    cbom = CBOMGenerator.generate_json(assets)
+
+    return {
+        "status": "completed",
+        "job_id": job_uuid,
+        "scan_type": "container",
+        "target": target,
+        "assets_found": len(assets),
+        "cbom_spec_version": cbom.get("specVersion", "1.6"),
+        "findings_summary": [
+            {
+                "hostname": a["hostname"],
+                "algorithm": a["algorithm"],
+                "rule_id": a.get("evidence_function", ""),
+                "file": a.get("evidence_file"),
+                "qtri_score": a["qtri_score"],
+                "recommendation": a.get("recommendation", "")
+            }
+            for a in assets
+        ]
+    }
+
+@app.post("/api/v1/scan/binary", tags=["Scan"])
+async def scan_binary_endpoint(
+    req: BinaryScanRequest,
+    session: Session = Depends(get_session),
+    current_user: dict = Depends(verify_token)  # 🔒 Protected
+):
+    """Deep binary cryptographic scanner with ML-KEM NTT constants and S-Box signature detection."""
+    target = req.filepath.strip()
+    import os
+    if target.upper() in ["SAMPLE", "DEMO", "MOCK"]:
+        target = generate_sample_crypto_binary("sample_pqc_target.bin")
+    elif not os.path.exists(target):
+        raise HTTPException(status_code=404, detail=f"Binary file not found: {target}")
+
+    assets = scan_binary(target)
+    job_uuid = str(uuid.uuid4())
+    _save_discovered_assets_to_db(assets, job_uuid)
+    cbom = CBOMGenerator.generate_json(assets)
+
+    return {
+        "status": "completed",
+        "job_id": job_uuid,
+        "scan_type": "binary",
+        "target": target,
+        "assets_found": len(assets),
+        "cbom_spec_version": cbom.get("specVersion", "1.6"),
+        "findings_summary": [
+            {
+                "hostname": a["hostname"],
+                "algorithm": a["algorithm"],
+                "offset": f"0x{a.get('evidence_offset', 0):08X}" if a.get("evidence_offset") is not None else None,
+                "evidence": a.get("evidence_function", ""),
+                "qtri_score": a["qtri_score"],
+                "is_pqc": a["is_pqc"],
+                "recommendation": a.get("recommendation", "")
+            }
+            for a in assets
+        ]
+    }
+
+@app.post("/api/v1/cbom/reconcile", tags=["Reports"])
+async def reconcile_cbom_endpoint(
+    session: Session = Depends(get_session),
+    current_user: dict = Depends(verify_token)  # 🔒 Protected
+):
+    """Reconcile assets across static, binary, container, and network sources to detect divergence."""
+    result = reconcile_assets(session)
+    return result
+
+@app.get("/api/v1/cbom/divergence", tags=["Reports"])
+async def get_divergent_assets(
+    session: Session = Depends(get_session),
+    current_user: dict = Depends(verify_token)  # 🔒 Protected
+):
+    """Fetch all assets flagged with multi-source divergence discrepancies."""
+    statement = select(DBAsset).where(DBAsset.divergence_flag != None)
+    flagged = session.exec(statement).all()
+    return {
+        "count": len(flagged),
+        "divergent_assets": [
+            {
+                "asset_uuid": a.asset_uuid,
+                "hostname": a.hostname,
+                "source_type": a.source_type,
+                "divergence_flag": a.divergence_flag,
+                "algorithm": a.algorithm,
+                "qtri_score": a.qtri_score,
+                "last_scanned": a.last_scanned
+            }
+            for a in flagged
         ]
     }
 

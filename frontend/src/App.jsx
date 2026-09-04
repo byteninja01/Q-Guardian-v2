@@ -1,6 +1,6 @@
 import React, { useState, useEffect, Suspense, lazy } from 'react';
 import axios from 'axios';
-import { ShieldCheck, Clock, AlertTriangle, FileText, LayoutDashboard, Database, Activity, Terminal, Radar, TimerReset, Waypoints, FileCode } from 'lucide-react';
+import { ShieldCheck, Clock, AlertTriangle, FileText, LayoutDashboard, Database, Activity, Terminal, Radar, TimerReset, Waypoints, FileCode, Layers } from 'lucide-react';
 import Header from './components/Header';
 import PlaybookModal from './components/PlaybookModal';
 import Chatbot from './components/Chatbot';
@@ -21,14 +21,14 @@ const SourceScanner = lazy(() => import('./components/SourceScanner'));
 
 const AnalystLoadingPanel = () => (
   <div className="min-h-[60vh] flex items-center justify-center">
-    <div className="w-full max-w-4xl glass-card border border-slate-200 bg-white/90 shadow-xl overflow-hidden">
-      <div className="bg-pnb-maroon text-white px-6 py-5 border-b-4 border-pnb-gold">
+    <div className="w-full max-w-4xl glass-card border border-slate-800 bg-slate-900 shadow-xl overflow-hidden">
+      <div className="bg-slate-950 text-white px-6 py-5 border-b-4 border-indigo-500">
         <div className="flex items-center gap-3 text-sm font-black uppercase tracking-[0.2em]">
-          <Activity size={18} className="text-pnb-gold animate-spin" />
-          Initializing Analyst Workspace
+          <Activity size={18} className="text-indigo-400 animate-spin" />
+          Initializing Cryptographic Analyst Workspace
         </div>
-        <p className="mt-2 text-xs text-white/75 font-semibold">
-          Establishing secure data channels, loading asset posture, and preparing live intelligence modules.
+        <p className="mt-2 text-xs text-slate-400 font-semibold">
+          Establishing secure data channels, loading multi-source posture, and preparing live intelligence modules.
         </p>
       </div>
 
@@ -36,7 +36,7 @@ const AnalystLoadingPanel = () => (
         <InfoTile
           icon={<Radar size={18} />}
           title="Start Here"
-          body="Use TRIGGER FULL SCAN to assess a domain such as pnb.bank.in or a target subsidiary endpoint."
+          body="Use TRIGGER FULL SCAN to assess an enterprise domain or use Multi-Source Scanner for containers and binaries."
         />
         <InfoTile
           icon={<TimerReset size={18} />}
@@ -180,14 +180,14 @@ function App() {
   }, [isAuthenticated]);
 
   const navItems = [
-    { id: 'dashboard',      label: 'POSTURE DASHBOARD', icon: <LayoutDashboard size={14} /> },
-    { id: 'assets',         label: 'ASSET INVENTORY',   icon: <Database size={14} /> },
-    { id: 'source_scanner', label: 'SOURCE SCANNER',    icon: <FileCode size={14} /> },
-    { id: 'api_scanner',    label: 'API SCANNER',       icon: <Terminal size={14} /> },
-    { id: 'hndl',          label: 'HNDL SIMULATOR',    icon: <Activity size={14} /> },
-    { id: 'graph',         label: 'TOPOLOGY GRAPH',    icon: <Activity size={14} /> },
-    { id: 'compliance',    label: 'CERT-IN MAPPER',    icon: <ShieldCheck size={14} /> },
-    { id: 'cbom',          label: 'CBOM EXPORT',       icon: <FileText size={14} /> },
+    { id: 'dashboard',      label: 'POSTURE DASHBOARD',    icon: <LayoutDashboard size={14} /> },
+    { id: 'assets',         label: 'ASSET INVENTORY',      icon: <Database size={14} /> },
+    { id: 'source_scanner', label: 'MULTI-SOURCE SCAN',    icon: <Layers size={14} /> },
+    { id: 'api_scanner',    label: 'API SCANNER',          icon: <Terminal size={14} /> },
+    { id: 'hndl',          label: 'HNDL SIMULATOR',       icon: <Activity size={14} /> },
+    { id: 'graph',         label: 'TOPOLOGY GRAPH',       icon: <Activity size={14} /> },
+    { id: 'compliance',    label: 'CERT-IN MAPPER',       icon: <ShieldCheck size={14} /> },
+    { id: 'cbom',          label: 'CBOM EXPORT',          icon: <FileText size={14} /> },
   ];
 
   return (
@@ -210,10 +210,10 @@ function App() {
               onClick={() => setActiveTab(item.id)}
               className={`px-4 sm:px-6 py-2 sm:py-2.5 rounded text-[9px] sm:text-[10px] font-black transition-all border-2 flex items-center gap-2 uppercase tracking-widest bg-white shadow-sm
                 ${activeTab === item.id 
-                  ? 'border-pnb-maroon text-pnb-maroon translate-y-0.5 shadow-none' 
+                  ? 'border-indigo-600 text-indigo-600 translate-y-0.5 shadow-none' 
                   : 'border-slate-200 text-slate-500 hover:border-slate-300 hover:text-slate-800'}`}
             >
-              <span className={activeTab === item.id ? 'text-pnb-maroon' : 'text-slate-400'}>{item.icon}</span> 
+              <span className={activeTab === item.id ? 'text-indigo-600' : 'text-slate-400'}>{item.icon}</span> 
               {item.label}
             </button>
           ))}
@@ -243,8 +243,8 @@ function App() {
         onClose={() => { setSelectedAsset(null); setPlaybook(null); }} 
       />
 
-      <footer className="fixed bottom-0 left-0 right-0 bg-pnb-maroon text-white/60 py-2 px-6 text-[10px] flex justify-between uppercase font-bold tracking-widest z-50">
-        <div>&copy; 2026 PUNJAB NATIONAL BANK. ALL RIGHTS RESERVED.</div>
+      <footer className="fixed bottom-0 left-0 right-0 bg-slate-950 border-t border-slate-800 text-slate-400 py-2 px-6 text-[10px] flex justify-between uppercase font-bold tracking-widest z-50">
+        <div>&copy; 2026 Q-GUARDIAN QUANTUM TRANSITION INTELLIGENCE. ALL RIGHTS RESERVED.</div>
         <div className="flex gap-4">
           <span>PRIVACY POLICY</span>
           <span>DISCLAIMER</span>

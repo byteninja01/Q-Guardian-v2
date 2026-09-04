@@ -94,6 +94,34 @@ class DBCBOMHistory(SQLModel, table=True):
 
 def create_db_and_tables():
     SQLModel.metadata.create_all(engine)
+    
+    # Auto-migrate SQLite/Postgres dbasset columns if table already existed from earlier versions
+    new_columns = [
+        ("source_type", "TEXT DEFAULT 'network_live'"),
+        ("asset_type", "TEXT DEFAULT 'service'"),
+        ("evidence_file", "TEXT"),
+        ("evidence_line", "INTEGER"),
+        ("evidence_offset", "INTEGER"),
+        ("evidence_function", "TEXT"),
+        ("primitive", "TEXT DEFAULT 'key-agreement'"),
+        ("mode", "TEXT"),
+        ("parameter_set_identifier", "TEXT"),
+        ("classical_security_level", "INTEGER DEFAULT 112"),
+        ("nist_quantum_security_level", "INTEGER DEFAULT 0"),
+        ("oid", "TEXT"),
+        ("divergence_flag", "TEXT"),
+        ("maturity_level", "INTEGER DEFAULT 1"),
+        ("open_ports_data", "TEXT"),
+        ("discovered_endpoints_data", "TEXT")
+    ]
+    from sqlalchemy import text
+    with engine.connect() as conn:
+        for col_name, col_type in new_columns:
+            try:
+                conn.execute(text(f"ALTER TABLE dbasset ADD COLUMN {col_name} {col_type}"))
+                conn.commit()
+            except Exception:
+                pass
 
 def get_session():
     with Session(engine) as session:

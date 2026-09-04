@@ -19,3 +19,4 @@ cyclonedx-python-lib
 tree-sitter
 lief
 jinja2
+semgrep
