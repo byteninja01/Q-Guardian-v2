@@ -19,6 +19,7 @@ from app.auth import (
 )
 
 # Import Engines
+from app.engines.static_analysis import scan_file_static, scan_directory_static
 from app.engines.discovery import run_discovery, scan_asset
 from app.engines.mosca import calculate_mosca_clocks, derive_migration_complexity
 from app.engines.scoring import calculate_qtri_score, calculate_cyber_rating
@@ -329,6 +330,108 @@ async def get_threat_intel(
     current_user: dict = Depends(verify_token)  # 🔒 Protected
 ):
     return fetch_threat_intel()
+
+# ─── Static Source Scanner ────────────────────────────────────────────────────
+class SourceScanRequest(BaseModel):
+    target_path: str          # Absolute or relative path to a file or directory
+    job_label: Optional[str] = None
+
+def _save_static_assets_to_db(assets: list, job_uuid: str):
+    """Persist static-scan assets into DB using the unified Phase-1 multi-source schema."""
+    with Session(engine) as session:
+        for a in assets:
+            mosca = {
+                "risk_state": "CRITICAL" if a["qtri_score"] < 30
+                    else ("WARNING" if a["qtri_score"] < 60 else "MONITOR")
+            }
+            db_asset = DBAsset(
+                asset_uuid=str(uuid.uuid4()),
+                job_uuid=job_uuid,
+                hostname=a["hostname"],
+                tls_version=a["tls_version"],
+                algorithm=a["algorithm"],
+                key_size=a["key_size"],
+                cipher_suite=a["cipher_suite"],
+                forward_secrecy=a["forward_secrecy"],
+                cert_valid=a["cert_valid"],
+                cert_expiry=a["cert_expiry"],
+                sensitivity_tier=a["sensitivity_tier"],
+                is_pqc=a["is_pqc"],
+                policy_compliant=a["policy_compliant"],
+                qtri_score=a["qtri_score"],
+                source_type=a.get("source_type", "static_code"),
+                asset_type=a.get("asset_type", "library"),
+                evidence_file=a.get("evidence_file"),
+                evidence_line=a.get("evidence_line"),
+                evidence_function=a.get("evidence_function"),
+                primitive=a.get("primitive", "unknown"),
+                classical_security_level=a.get("classical_security_level", 0),
+                nist_quantum_security_level=a.get("nist_quantum_security_level", 0),
+                mosca_data=json.dumps(mosca),
+                last_scanned=datetime.now().isoformat()
+            )
+            session.add(db_asset)
+        session.commit()
+
+@app.post("/api/v1/scan/source", tags=["Scan"])
+async def scan_source(
+    req: SourceScanRequest,
+    session: Session = Depends(get_session),
+    current_user: dict = Depends(verify_token)  # 🔒 Protected
+):
+    """AST-based static source code scanner. Accepts a file or directory path."""
+    target = req.target_path.strip()
+
+    # Basic SSRF / path-traversal guard: reject remote URLs
+    if target.startswith(("http://", "https://", "//")):
+        raise HTTPException(status_code=400, detail="Remote URLs not supported for source scan. Provide a local path.")
+
+    import os
+    if os.path.isdir(target):
+        assets = scan_directory_static(target)
+    elif os.path.isfile(target):
+        assets = scan_file_static(target)
+    else:
+        raise HTTPException(status_code=404, detail=f"Path not found: {target}")
+
+    job_uuid = str(uuid.uuid4())
+    _save_static_assets_to_db(assets, job_uuid)
+
+    cbom = CBOMGenerator.generate_json(assets)
+
+    return {
+        "status": "completed",
+        "job_id": job_uuid,
+        "scan_type": "static_source",
+        "target": target,
+        "assets_found": len(assets),
+        "cbom_spec_version": cbom.get("specVersion", "1.6"),
+        "findings_summary": [
+            {
+                "hostname": a["hostname"],
+                "algorithm": a["algorithm"],
+                "rule_id": a.get("evidence_function", ""),
+                "file": a.get("evidence_file"),
+                "line": a.get("evidence_line"),
+                "qtri_score": a["qtri_score"],
+                "recommendation": a.get("recommendation", "")
+            }
+            for a in assets
+        ]
+    }
+
+@app.get("/api/v1/cbom/export/cyclonedx", tags=["Reports"])
+async def export_cbom_cyclonedx(
+    session: Session = Depends(get_session),
+    current_user: dict = Depends(verify_token)  # 🔒 Protected
+):
+    """Export all discovered assets as a native CycloneDX 1.6 CBOM JSON document."""
+    assets = _serialize_assets(session)
+    if not assets:
+        raise HTTPException(status_code=404, detail="No assets found. Run a scan first.")
+    cbom = CBOMGenerator.generate_cyclonedx_1_6_json(assets)
+    from fastapi.responses import JSONResponse
+    return JSONResponse(content=cbom)
 
 if __name__ == "__main__":
     import uvicorn

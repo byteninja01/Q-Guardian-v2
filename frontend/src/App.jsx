@@ -1,6 +1,6 @@
 import React, { useState, useEffect, Suspense, lazy } from 'react';
 import axios from 'axios';
-import { ShieldCheck, Clock, AlertTriangle, FileText, LayoutDashboard, Database, Activity, Terminal, Radar, TimerReset, Waypoints } from 'lucide-react';
+import { ShieldCheck, Clock, AlertTriangle, FileText, LayoutDashboard, Database, Activity, Terminal, Radar, TimerReset, Waypoints, FileCode } from 'lucide-react';
 import Header from './components/Header';
 import PlaybookModal from './components/PlaybookModal';
 import Chatbot from './components/Chatbot';
@@ -17,6 +17,7 @@ const CBOMViewer = lazy(() => import('./components/CBOMViewer'));
 const DependencyGraph = lazy(() => import('./components/DependencyGraph'));
 const ComplianceMapper = lazy(() => import('./components/ComplianceMapper'));
 const ApiScanner = lazy(() => import('./components/ApiScanner'));
+const SourceScanner = lazy(() => import('./components/SourceScanner'));
 
 const AnalystLoadingPanel = () => (
   <div className="min-h-[60vh] flex items-center justify-center">
@@ -179,13 +180,14 @@ function App() {
   }, [isAuthenticated]);
 
   const navItems = [
-    { id: 'dashboard', label: 'POSTURE DASHBOARD', icon: <LayoutDashboard size={14} /> },
-    { id: 'assets', label: 'ASSET INVENTORY', icon: <Database size={14} /> },
-    { id: 'api_scanner', label: 'API SCANNER', icon: <Terminal size={14} /> },
-    { id: 'hndl', label: 'HNDL SIMULATOR', icon: <Activity size={14} /> },
-    { id: 'graph', label: 'TOPOLOGY GRAPH', icon: <Activity size={14} /> },
-    { id: 'compliance', label: 'RBI MAPPER', icon: <ShieldCheck size={14} /> },
-    { id: 'cbom', label: 'CBOM READY', icon: <FileText size={14} /> },
+    { id: 'dashboard',      label: 'POSTURE DASHBOARD', icon: <LayoutDashboard size={14} /> },
+    { id: 'assets',         label: 'ASSET INVENTORY',   icon: <Database size={14} /> },
+    { id: 'source_scanner', label: 'SOURCE SCANNER',    icon: <FileCode size={14} /> },
+    { id: 'api_scanner',    label: 'API SCANNER',       icon: <Terminal size={14} /> },
+    { id: 'hndl',          label: 'HNDL SIMULATOR',    icon: <Activity size={14} /> },
+    { id: 'graph',         label: 'TOPOLOGY GRAPH',    icon: <Activity size={14} /> },
+    { id: 'compliance',    label: 'CERT-IN MAPPER',    icon: <ShieldCheck size={14} /> },
+    { id: 'cbom',          label: 'CBOM EXPORT',       icon: <FileText size={14} /> },
   ];
 
   return (
@@ -220,13 +222,14 @@ function App() {
         <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 w-full min-h-[60vh]">
           <ErrorBoundary>
             <Suspense fallback={<AnalystLoadingPanel />}>
-              {activeTab === 'dashboard' && <Dashboard assets={assets} rating={rating} />}
-              {activeTab === 'assets' && <AssetTable assets={assets} onPlaybook={handleOpenPlaybook} />}
-              {activeTab === 'api_scanner' && <ApiScanner />}
-              {activeTab === 'hndl' && <HNDLSimulator assets={assets} />}
-              {activeTab === 'graph' && <DependencyGraph assets={assets} />}
-              {activeTab === 'compliance' && <ComplianceMapper />}
-              {activeTab === 'cbom' && <CBOMViewer assets={assets} />}
+              {activeTab === 'dashboard'      && <Dashboard assets={assets} rating={rating} />}
+              {activeTab === 'assets'         && <AssetTable assets={assets} onPlaybook={handleOpenPlaybook} />}
+              {activeTab === 'source_scanner' && <SourceScanner onScanComplete={fetchData} />}
+              {activeTab === 'api_scanner'    && <ApiScanner />}
+              {activeTab === 'hndl'           && <HNDLSimulator assets={assets} />}
+              {activeTab === 'graph'          && <DependencyGraph assets={assets} />}
+              {activeTab === 'compliance'     && <ComplianceMapper />}
+              {activeTab === 'cbom'           && <CBOMViewer assets={assets} />}
             </Suspense>
           </ErrorBoundary>
         </div>
