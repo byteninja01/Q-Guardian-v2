@@ -1343,5 +1343,124 @@ designed to be deployed, demonstrated, and used as a production-grade
 tool for India's transition to quantum-safe banking infrastructure.
 
 ================================================================================
+SECTION 13: BEGINNER & ENGINEERING STUDENT GUIDE (CONCEPTS & TECH STACK)
+================================================================================
+
+13.1 THE BIG PICTURE: WHAT IS Q-GUARDIAN V2?
+---------------------------------------------
+Imagine a major bank with a massive digital vault. Inside this vault are
+millions of transactions, credit card numbers, passwords, and private customer
+records.
+
+To keep hackers out, the bank locks everything behind digital padlocks (called
+Encryption or Cryptography). For the last 30 years, these padlocks have worked
+using complex mathematical puzzles that would take ordinary supercomputers
+millions of years to crack.
+
+However, a new technological revolution is coming: Quantum Computing. Quantum
+computers process math fundamentally differently from classical computers. Once
+a powerful enough quantum computer is built (known as a CRQC - Cryptographically
+Relevant Quantum Computer), it will solve those mathematical puzzles in minutes,
+unlocking every vault on the internet.
+
+What makes this worse is a threat called "Harvest Now, Decrypt Later" (HNDL):
+nation-state hackers are stealing encrypted bank data TODAY, storing it on giant
+hard drives, and waiting for quantum computers to come online in 5-10 years to
+decrypt it all retroactively.
+
+If a bank wants to upgrade its digital locks to Quantum-Safe Locks (Post-Quantum
+Cryptography - PQC), it runs into a massive problem: They don't even know where
+all their old locks are!
+
+Q-Guardian v2 acts as an Enterprise Security Radar & Quantum Risk Platform.
+It performs 4 main jobs:
+  1. Discovers every single cryptographic lock across 4 layers (Network, Code,
+     Containers, Binaries).
+  2. Exposes Lies & Divergence (e.g., when a configuration file claims to use
+     a modern lock, but the compiled software binary underneath still uses a
+     1990s weak lock).
+  3. Calculates a Quantum Clock (using mathematical models like Mosca's Theorem)
+     to tell the bank exactly how many years or months they have before their data
+     becomes compromised.
+  4. Generates a Migration Plan & Standards-Compliant Report (a CBOM -
+     Cryptographic Bill of Materials) so engineers know step-by-step how to swap out
+     weak algorithms for NIST-standard quantum-safe ones.
+
+
+13.2 CORE CYBERSECURITY & QUANTUM CONCEPTS
+-------------------------------------------
+1. Cryptography (The Locks & Keys):
+   - Symmetric Encryption (e.g., AES): Uses the SAME secret key to lock and unlock
+     data. Very fast, used for data at rest.
+   - Asymmetric Encryption / Public Key Cryptography (e.g., RSA, ECC): Uses TWO
+     keys (Public to lock, Private to unlock). Used for establishing secure HTTPS
+     connections.
+   - Hashing (e.g., MD5, SHA-1, SHA-256): One-way fingerprint function. MD5/SHA-1
+     are legacy/broken, SHA-256 is modern.
+
+2. The Quantum Threat & CRQC:
+   - CRQC: A quantum computer capable of breaking RSA/ECC via Shor's Algorithm.
+   - Shor's Algorithm: Factors large primes in polynomial time, breaking RSA/ECC.
+   - Grover's Algorithm: Speeds up brute-forcing symmetric keys, requiring migration
+     from AES-128 to AES-256.
+
+3. Harvest-Now-Decrypt-Later (HNDL):
+   - Adversaries record encrypted network traffic today, store it, and decrypt it
+     later using a CRQC.
+
+4. Post-Quantum Cryptography (PQC):
+   - Algorithms based on hard mathematical lattice problems that run on classical
+     hardware but resist quantum attacks.
+   - Standards: FIPS 203 (ML-KEM for key encapsulation), FIPS 204 (ML-DSA for
+     digital signatures), FIPS 205 (SLH-DSA).
+
+5. Mosca's Inequality (X + Y > Z):
+   - X = Migration Time, Y = Data Shelf Life, Z = Time to CRQC.
+   - If X + Y > Z, the organization's data will be exposed before migration completes.
+
+6. Declared vs. Actual Divergence:
+   - Discrepancy between manifest declarations (e.g., package.json or container OS)
+     and actual deployed binaries (e.g., legacy MD5 tables inside compiled ELF/PE).
+
+7. Cryptographic Bill of Materials (CBOM):
+   - Machine-readable specification (CycloneDX 1.6 / ECMA-424) detailing every
+     cryptographic primitive, algorithm, key size, and evidence location.
+
+
+13.3 ARCHITECTURE & TECHNICAL ENGINE BREAKDOWN
+-----------------------------------------------
+1. Backend Core:
+   - FastAPI & Uvicorn: High-performance async Python web framework and ASGI server.
+   - SQLModel & SQLite/PostgreSQL: Hybrid ORM (SQLAlchemy + Pydantic) for schema
+     validation and asset storage.
+   - Auth: JWT (python-jose) and password hashing (passlib/bcrypt).
+
+2. Multi-Source Discovery Vectors:
+   - Vector 1 (Network): discovery.py, active_discovery.py, port_scanner.py.
+     Queries crt.sh logs, active TLS handshakes, open TCP ports, OpenAPI specs.
+   - Vector 2 (Static Code): static_analysis.py, source_scanner.py.
+     AST/regex code parsing + Semgrep ruleset (OWASP crypto rules).
+   - Vector 3 (Containers): container_scanner.py.
+     Trivy + Syft SBOM container scanners matching PQC version floors.
+   - Vector 4 (Binaries): binary_scanner.py.
+     LIEF binary header parser + byte-level constant signature matching in .rodata
+     (ML-KEM NTT zetas, AES S-boxes, MD5 IVs).
+
+3. Reconciler & Risk Engines:
+   - Reconciler (reconciler.py): Cross-source correlation & divergence flags.
+   - Scoring (scoring.py): Q-TRI 0-100 asset rating with RBI S1-S5 weighting.
+   - Mosca & HNDL (mosca.py, hndl.py): Quantum countdown & exposure calculator.
+   - CBOM (cbom.py): CycloneDX 1.6 JSON & ReportLab PDF exporter.
+   - Local Offline RAG Chatbot (rag_advisor.py, chatbot.py): LangChain + FAISS
+     vector database running 100% offline without external AI API dependencies.
+
+4. Frontend Interface:
+   - React 18 + Vite 5: Fast UI application.
+   - TailwindCSS 3: Dark navy/cobalt enterprise theme system.
+   - Recharts & D3.js / react-force-graph-2d: Data charts & dynamic network topology.
+
+
+================================================================================
                             END OF DOCUMENTATION
 ================================================================================
+
