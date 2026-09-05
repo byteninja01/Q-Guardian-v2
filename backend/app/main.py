@@ -30,11 +30,17 @@ from app.engines.mosca import calculate_mosca_clocks, derive_migration_complexit
 from app.engines.scoring import calculate_qtri_score, calculate_cyber_rating
 from app.engines.hndl import calculate_hndl_exposure
 from app.engines.cbom import CBOMGenerator
-from app.engines.migration import get_migration_playbook
+from app.engines.migration import get_migration_playbook, generate_strategy_stub
 from app.engines.reporting import generate_board_brief_pdf
 from app.engines.compliance import map_to_rbi_controls, map_to_all_frameworks
 from app.engines.port_scanner import run_port_scan
 from app.engines.api_scanner import run_api_scan
+from app.engines.managed_crypto import (
+    ingest_kms_inventory,
+    ingest_hsm_inventory,
+    get_sample_kms_fixtures,
+    get_sample_hsm_fixtures
+)
 
 from fastapi.responses import StreamingResponse
 import io
@@ -263,7 +269,48 @@ async def get_playbook(
     asset = session.exec(select(DBAsset).where(DBAsset.asset_uuid == asset_id)).first()
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
-    return get_migration_playbook({"algorithm": asset.algorithm, "tls_version": asset.tls_version})
+    asset_dict = {
+        "hostname": asset.hostname,
+        "algorithm": asset.algorithm,
+        "tls_version": asset.tls_version,
+        "key_size": asset.key_size,
+        "source_type": asset.source_type,
+        "sensitivity_tier": asset.sensitivity_tier,
+        "is_pqc": asset.is_pqc
+    }
+    playbook = get_migration_playbook(asset_dict)
+    # Also attach the pre-rendered strategy stub
+    playbook["strategy_stub"] = generate_strategy_stub(asset_dict, playbook)
+    return playbook
+
+@app.get("/api/v1/migration/{asset_id}/codegen", tags=["Migration"])
+async def get_playbook_codegen(
+    asset_id: str,
+    session: Session = Depends(get_session),
+    current_user: dict = Depends(verify_token)  # 🔒 Protected
+):
+    """Downloadable Python Crypto-Agility Strategy-Pattern stub rendered via Jinja2."""
+    asset = session.exec(select(DBAsset).where(DBAsset.asset_uuid == asset_id)).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    asset_dict = {
+        "hostname": asset.hostname,
+        "algorithm": asset.algorithm,
+        "tls_version": asset.tls_version,
+        "key_size": asset.key_size,
+        "source_type": asset.source_type,
+        "sensitivity_tier": asset.sensitivity_tier,
+        "is_pqc": asset.is_pqc
+    }
+    playbook = get_migration_playbook(asset_dict)
+    code = generate_strategy_stub(asset_dict, playbook)
+    clean_host = re.sub(r"[^A-Za-z0-9_]", "_", asset.hostname)
+    return {
+        "asset_id": asset_id,
+        "hostname": asset.hostname,
+        "filename": f"crypto_strategy_{clean_host}.py",
+        "code": code
+    }
 
 @app.get("/api/v1/reports/board-brief", tags=["Reports"])
 async def get_board_brief(
@@ -411,6 +458,7 @@ def _save_discovered_assets_to_db(assets: list, job_uuid: str):
                 oid=a.get("oid"),
                 divergence_flag=a.get("divergence_flag"),
                 mosca_data=json.dumps(mosca),
+                hndl_data=json.dumps(a["hndl"]) if a.get("hndl") else None,
                 last_scanned=datetime.now().isoformat()
             )
             session.add(db_asset)
@@ -601,6 +649,96 @@ async def scan_binary_endpoint(
                 "evidence": a.get("evidence_function", ""),
                 "qtri_score": a["qtri_score"],
                 "is_pqc": a["is_pqc"],
+                "recommendation": a.get("recommendation", "")
+            }
+            for a in assets
+        ]
+    }
+
+class KMSIntakeRequest(BaseModel):
+    records: Optional[List[dict]] = None
+    use_sample_fixtures: bool = False
+
+class HSMIntakeRequest(BaseModel):
+    records: Optional[List[dict]] = None
+    use_sample_fixtures: bool = False
+
+@app.get("/api/v1/intake/samples", tags=["Intake"])
+async def get_intake_samples(
+    current_user: dict = Depends(verify_token)  # 🔒 Protected
+):
+    """Retrieve pre-packaged demo fixtures for Cloud KMS and Banking HSM fleet."""
+    return {
+        "kms": get_sample_kms_fixtures(),
+        "hsm": get_sample_hsm_fixtures()
+    }
+
+@app.post("/api/v1/intake/kms", tags=["Intake"])
+async def intake_kms_endpoint(
+    req: KMSIntakeRequest,
+    session: Session = Depends(get_session),
+    current_user: dict = Depends(verify_token)  # 🔒 Protected
+):
+    """Ingest Cloud KMS inventory (AWS KMS, Azure Key Vault, Google Cloud KMS, Vault)."""
+    raw_records = req.records
+    if req.use_sample_fixtures or not raw_records:
+        raw_records = get_sample_kms_fixtures()
+
+    assets = ingest_kms_inventory(raw_records)
+    job_uuid = str(uuid.uuid4())
+    _save_discovered_assets_to_db(assets, job_uuid)
+    cbom = CBOMGenerator.generate_json(assets)
+
+    return {
+        "status": "completed",
+        "job_id": job_uuid,
+        "intake_type": "cloud_kms",
+        "assets_ingested": len(assets),
+        "cbom_spec_version": cbom.get("specVersion", "1.6"),
+        "findings_summary": [
+            {
+                "hostname": a["hostname"],
+                "algorithm": a["algorithm"],
+                "provider": a.get("evidence_file", ""),
+                "qtri_score": a["qtri_score"],
+                "is_pqc": a["is_pqc"],
+                "policy_compliant": a["policy_compliant"],
+                "recommendation": a.get("recommendation", "")
+            }
+            for a in assets
+        ]
+    }
+
+@app.post("/api/v1/intake/hsm", tags=["Intake"])
+async def intake_hsm_endpoint(
+    req: HSMIntakeRequest,
+    session: Session = Depends(get_session),
+    current_user: dict = Depends(verify_token)  # 🔒 Protected
+):
+    """Ingest Hardware Security Module (HSM) fleet inventory (Thales Luna, Utimaco, CloudHSM)."""
+    raw_records = req.records
+    if req.use_sample_fixtures or not raw_records:
+        raw_records = get_sample_hsm_fixtures()
+
+    assets = ingest_hsm_inventory(raw_records)
+    job_uuid = str(uuid.uuid4())
+    _save_discovered_assets_to_db(assets, job_uuid)
+    cbom = CBOMGenerator.generate_json(assets)
+
+    return {
+        "status": "completed",
+        "job_id": job_uuid,
+        "intake_type": "hardware_module",
+        "assets_ingested": len(assets),
+        "cbom_spec_version": cbom.get("specVersion", "1.6"),
+        "findings_summary": [
+            {
+                "hostname": a["hostname"],
+                "algorithm": a["algorithm"],
+                "make_model": a.get("evidence_file", ""),
+                "qtri_score": a["qtri_score"],
+                "is_pqc": a["is_pqc"],
+                "risk_state": a.get("mosca", {}).get("risk_state", "CRITICAL"),
                 "recommendation": a.get("recommendation", "")
             }
             for a in assets
