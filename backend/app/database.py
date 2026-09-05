@@ -6,13 +6,22 @@ import json
 
 from app.settings import DATABASE_URL
 
-# SQLite requires check_same_thread=False; PostgreSQL does not accept it
-if DATABASE_URL.startswith("sqlite"):
+# Try to connect to configured DATABASE_URL; fall back to SQLite if PostgreSQL driver is missing
+try:
+    if DATABASE_URL.startswith("sqlite"):
+        connect_args = {"check_same_thread": False}
+    else:
+        connect_args = {}
+    engine = create_engine(DATABASE_URL, echo=False, connect_args=connect_args)
+    # Test connection
+    with engine.connect() as conn:
+        pass
+except Exception as e:
+    print(f"[Warning] Database connection to {DATABASE_URL} failed ({e}). Falling back to local SQLite database: sqlite:///./qguardian.db")
+    DATABASE_URL = "sqlite:///./qguardian.db"
     connect_args = {"check_same_thread": False}
-else:
-    connect_args = {}
+    engine = create_engine(DATABASE_URL, echo=False, connect_args=connect_args)
 
-engine = create_engine(DATABASE_URL, echo=False, connect_args=connect_args)
 
 class DBScanJob(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
