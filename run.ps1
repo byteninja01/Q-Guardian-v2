@@ -8,25 +8,29 @@ if ($FoundVenv) {
     $BackendPy = (Resolve-Path $FoundVenv).Path
     Write-Host "Using project virtualenv Python: $BackendPy" -ForegroundColor Green
 } else {
-    Write-Host "WARNING: no backend venv found (checked backend\venv and backend\.venv) - installing backend requirements into system Python." -ForegroundColor Yellow
+    Write-Host "WARNING: backend/.venv not found — installing backend requirements into system Python." -ForegroundColor Yellow
     Push-Location backend
     python -m pip install -r requirements.txt
     Pop-Location
 }
 
 if (-not (Test-Path "frontend\node_modules")) {
-    Write-Host "Installing frontend dependencies (first run only)..." -ForegroundColor Yellow
+    Write-Host "Installing frontend dependencies..." -ForegroundColor Yellow
     Push-Location frontend
     npm install
     Pop-Location
 }
 
 Write-Host "Starting Q-Guardian Backend..." -ForegroundColor DarkRed
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd backend; $BackendPy -m uvicorn app.main:app --reload --port 8000"
+$backendCmd = "cd '$PWD\backend'; & '$BackendPy' -m uvicorn app.main:app --reload --port 8000"
+Start-Process powershell -ArgumentList "-NoExit", "-Command", $backendCmd
 
 Write-Host "Starting Q-Guardian Frontend..." -ForegroundColor Yellow
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd frontend; npm run dev"
+$frontendCmd = "cd '$PWD\frontend'; npm run dev"
+Start-Process powershell -ArgumentList "-NoExit", "-Command", $frontendCmd
 
 Write-Host "Q-Guardian Platform is launching!" -ForegroundColor Cyan
 Write-Host "Backend: http://localhost:8000"
 Write-Host "Frontend: http://localhost:5173"
+
+
