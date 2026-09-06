@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime
 from io import BytesIO
 from reportlab.lib.pagesizes import A4, landscape
@@ -15,6 +16,77 @@ try:
     HAS_CYCLONEDX_LIB = True
 except ImportError:
     HAS_CYCLONEDX_LIB = False
+
+# Map the engine's primitive strings to the CycloneDX 1.6 crypto primitive enum.
+_PRIMITIVE_ENUM = {
+    "hash": "HASH",
+    "symmetric-cipher": "BLOCK_CIPHER",
+    "stream-cipher": "STREAM_CIPHER",
+    "public-key-encryption": "PKE",
+    "key-agreement": "KEY_AGREE",
+    "signature": "SIGNATURE",
+    "mac": "MAC",
+    "kdf": "KDF",
+    "random": "DRBG",
+}
+# Valid CycloneDX enum tokens for the hand-rolled fallback path.
+_PRIMITIVE_TOKEN = {
+    "hash": "hash", "symmetric-cipher": "block-cipher", "stream-cipher": "stream-cipher",
+    "public-key-encryption": "pke", "key-agreement": "key-agree", "signature": "signature",
+    "mac": "mac", "kdf": "kdf", "random": "drbg",
+}
+_PARAM_NIST_LEVEL = {
+    "ML-KEM-512": 1, "ML-KEM-768": 3, "ML-KEM-1024": 5,
+    "ML-DSA-44": 2, "ML-DSA-65": 3, "ML-DSA-87": 5,
+    "FALCON-512": 1, "FALCON-1024": 5, "SLH-DSA": 2, "SPHINCS+": 2,
+}
+
+
+def _is_kem(algo_upper: str) -> bool:
+    return "ML-KEM" in algo_upper or "KYBER" in algo_upper or re.search(r"\bKEM\b", algo_upper) is not None
+
+
+def _primitive_enum(asset: dict):
+    algo = str(asset.get("algorithm", "")).upper()
+    if _is_kem(algo):
+        return CryptoPrimitive.KEM
+    name = _PRIMITIVE_ENUM.get(str(asset.get("primitive", "")).lower())
+    if name:
+        return getattr(CryptoPrimitive, name, CryptoPrimitive.UNKNOWN)
+    # Fall back to keyword sniffing only if the engine gave no primitive.
+    if "MD5" in algo or "SHA" in algo:
+        return CryptoPrimitive.HASH
+    if "AES" in algo or "DES" in algo or "RC4" in algo:
+        return CryptoPrimitive.BLOCK_CIPHER
+    if "RSA" in algo:
+        return CryptoPrimitive.PKE
+    if re.search(r"DSA|DILITHIUM|FALCON|SLH-DSA|SPHINCS", algo):
+        return CryptoPrimitive.SIGNATURE
+    return CryptoPrimitive.UNKNOWN
+
+
+def _asset_type_enum(asset: dict):
+    algo = str(asset.get("algorithm", "")).upper()
+    prim = str(asset.get("primitive", "")).lower()
+    if prim == "protocol" or "TLS" in algo or "SSL" in algo:
+        return CryptoAssetType.PROTOCOL
+    if prim == "related-crypto-material" or "CA-CERT" in algo or "CERTIFICATE" in algo or "PRIVATE-KEY" in algo or "PRIVATE KEY" in algo:
+        return CryptoAssetType.RELATED_CRYPTO_MATERIAL
+    return CryptoAssetType.ALGORITHM
+
+
+def _nist_level(asset: dict):
+    v = asset.get("nist_quantum_security_level")
+    if v is not None:
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            pass
+    ps = str(asset.get("parameter_set_identifier") or asset.get("algorithm", "")).upper()
+    for token, lvl in _PARAM_NIST_LEVEL.items():
+        if token in ps:
+            return lvl
+    return None  # omit rather than fabricate a category
 
 
 def _component_properties(asset: dict) -> list:
@@ -53,63 +125,85 @@ class CBOMGenerator:
             for asset in assets:
                 algo_name = asset.get("algorithm", "UNKNOWN")
                 hostname = asset.get("hostname", "unnamed_asset")
-                
-                # Primitive mapping
-                prim = CryptoPrimitive.KEY_AGREE
-                if "RSA" in algo_name or "PKE" in algo_name:
-                    prim = CryptoPrimitive.PKE
-                elif "DSA" in algo_name or "ECDSA" in algo_name or "Dilithium" in algo_name:
-                    prim = CryptoPrimitive.SIGNATURE
-                elif "KEM" in algo_name or "Kyber" in algo_name:
-                    prim = CryptoPrimitive.KEM
-                elif "AES" in algo_name or "GCM" in algo_name:
-                    prim = CryptoPrimitive.BLOCK_CIPHER
-                elif "SHA" in algo_name or "HASH" in algo_name:
-                    prim = CryptoPrimitive.HASH
+
+                asset_type = _asset_type_enum(asset)
+                param = asset.get("parameter_set_identifier") or (
+                    str(asset["key_size"]) if asset.get("key_size") else None)
+                csl = asset.get("classical_security_level")
+                try:
+                    csl = int(csl) if csl is not None else None
+                except (TypeError, ValueError):
+                    csl = None
+
+                # algorithmProperties only belongs on assetType=algorithm.
+                algo_props = None
+                if asset_type == CryptoAssetType.ALGORITHM:
+                    algo_props = AlgorithmProperties(
+                        primitive=_primitive_enum(asset),
+                        parameter_set_identifier=str(param) if param else None,
+                        classical_security_level=csl,
+                        nist_quantum_security_level=_nist_level(asset),
+                    )
 
                 props = _component_properties(asset)
                 comp = Component(
                     name=f"{hostname}:{algo_name}",
                     type=ComponentType.CRYPTOGRAPHIC_ASSET,
-                    version=str(asset.get("key_size", "")),
+                    version=str(asset.get("key_size") or ""),
                     properties=props if props else None,
                     crypto_properties=CryptoProperties(
-                        asset_type=CryptoAssetType.ALGORITHM,
-                        algorithm_properties=AlgorithmProperties(
-                            primitive=prim,
-                            parameter_set_identifier=str(asset.get("parameter_set_identifier") or asset.get("key_size", "")),
-                            nist_quantum_security_level=int(asset.get("nist_quantum_security_level") or (1 if asset.get("is_pqc") else 0))
-                        )
-                    )
+                        asset_type=asset_type,
+                        algorithm_properties=algo_props,
+                        oid=asset.get("oid") or None,
+                    ),
                 )
                 bom.components.add(comp)
             outputter = JsonV1Dot6(bom)
             return json.loads(outputter.output_as_string())
         else:
-            # Native fallback dictionary schema matching CycloneDX 1.6 specification
+            # Native fallback dict — kept schema-valid for environments without
+            # cyclonedx-python-lib installed.
             components = []
             for asset in assets:
+                prim_token = "unknown"
+                if _is_kem(str(asset.get("algorithm", "")).upper()):
+                    prim_token = "kem"
+                else:
+                    prim_token = _PRIMITIVE_TOKEN.get(str(asset.get("primitive", "")).lower(), "unknown")
+                param = asset.get("parameter_set_identifier") or (
+                    str(asset["key_size"]) if asset.get("key_size") else None)
+                algo_props = {"primitive": prim_token}
+                if param:
+                    algo_props["parameterSetIdentifier"] = str(param)
+                nql = _nist_level(asset)
+                if nql is not None:
+                    algo_props["nistQuantumSecurityLevel"] = nql
+                if asset.get("classical_security_level") is not None:
+                    try:
+                        algo_props["classicalSecurityLevel"] = int(asset["classical_security_level"])
+                    except (TypeError, ValueError):
+                        pass
+
+                crypto_props = {"assetType": "algorithm", "algorithmProperties": algo_props}
+                if asset.get("oid"):
+                    crypto_props["oid"] = str(asset["oid"])
+
+                # Build occurrence with only non-null keys (schema requires int/str).
+                occ = {"location": asset.get("evidence_file") or asset.get("hostname") or "unknown"}
+                if asset.get("evidence_line") is not None:
+                    try:
+                        occ["line"] = int(asset["evidence_line"])
+                    except (TypeError, ValueError):
+                        pass
+                if asset.get("evidence_function"):
+                    occ["symbol"] = str(asset["evidence_function"])
+
                 components.append({
                     "type": "cryptographic-asset",
                     "name": asset.get("hostname", "unnamed_asset"),
-                    "version": str(asset.get("key_size", "")),
-                    "cryptoProperties": {
-                        "assetType": "algorithm",
-                        "algorithmProperties": {
-                            "primitive": asset.get("primitive", "key-agreement"),
-                            "parameterSetIdentifier": str(asset.get("key_size", "")),
-                            "nistQuantumSecurityLevel": 1 if asset.get("is_pqc") else 0
-                        }
-                    },
-                    "evidence": {
-                        "occurrences": [
-                            {
-                                "location": asset.get("evidence_file") or asset.get("hostname"),
-                                "line": asset.get("evidence_line"),
-                                "symbol": asset.get("evidence_function")
-                            }
-                        ]
-                    }
+                    "version": str(asset.get("key_size") or ""),
+                    "cryptoProperties": crypto_props,
+                    "evidence": {"occurrences": [occ]},
                 })
             return {
                 "$schema": "http://cyclonedx.org/schema/bom-1.6.schema.json",
@@ -118,9 +212,9 @@ class CBOMGenerator:
                 "version": 1,
                 "metadata": {
                     "timestamp": datetime.now().isoformat(),
-                    "tool": "Q-Guardian v2.0 Enterprise CBOM Engine"
+                    "tools": [{"name": "Q-Guardian Enterprise CBOM Engine", "version": "2.0"}],
                 },
-                "components": components
+                "components": components,
             }
 
     @staticmethod
@@ -138,7 +232,7 @@ class CBOMGenerator:
         indigo_primary = colors.Color(79/255, 70/255, 229/255) # Indigo #4F46E5
         
         # Title
-        styles.add(ParagraphStyle(name='QGTitle', fontSize=18, textColor=indigo_primary, spaceAfter=10, fontWeight='bold'))
+        styles.add(ParagraphStyle(name='QGTitle', fontSize=18, textColor=indigo_primary, spaceAfter=10, fontName='Helvetica-Bold'))
         elements.append(Paragraph("Q-GUARDIAN ENTERPRISE | Cryptographic Bill of Materials (CBOM)", styles['QGTitle']))
         elements.append(Paragraph(f"Specification: CycloneDX 1.6 Native Standard", styles['Normal']))
         elements.append(Paragraph(f"Export Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles['Normal']))
@@ -152,7 +246,7 @@ class CBOMGenerator:
                 asset.get("hostname", "N/A"),
                 asset.get("source_type", "network_live"),
                 asset.get("algorithm", "UNKNOWN"),
-                str(asset.get("key_size", 0)),
+                str(asset.get("key_size") or "N/A"),
                 asset.get("tls_version", "N/A"),
                 "YES (PQC)" if asset.get("is_pqc") else "NO (Legacy)"
             ])

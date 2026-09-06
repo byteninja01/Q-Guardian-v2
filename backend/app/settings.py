@@ -41,6 +41,15 @@ FRONTEND_ORIGIN_REGEX = _clean_optional(os.getenv("FRONTEND_ORIGIN_REGEX"))
 
 ALLOW_PRIVATE_SCAN_TARGETS = os.getenv("ALLOW_PRIVATE_SCAN_TARGETS", "false").strip().lower() == "true"
 
+# When set, every local-path scan (source / semgrep / container / binary) is
+# confined under this directory (defence against path traversal / arbitrary file
+# read). When unset, a sensitive-path denylist still applies. Absolute path.
+SCAN_ROOT = _clean_optional(os.getenv("SCAN_ROOT"))
+
+# Active OWASP API probes that MUTATE state (POST privileged fields, DELETE) are
+# off by default; only real passive/GET checks run unless explicitly enabled.
+ALLOW_MUTATING_API_PROBES = os.getenv("ALLOW_MUTATING_API_PROBES", "false").strip().lower() == "true"
+
 DISCOVERY_MAX_ASSETS = os.getenv("DISCOVERY_MAX_ASSETS", "").strip()
 DISCOVERY_MAX_ASSETS = int(DISCOVERY_MAX_ASSETS) if DISCOVERY_MAX_ASSETS else None
 

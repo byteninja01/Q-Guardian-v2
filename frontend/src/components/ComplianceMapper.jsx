@@ -5,15 +5,15 @@ import { API_BASE } from '../lib/api.js';
 
 const FRAMEWORK_META = {
   rbi_csf_2: {
-    label: 'RBI Cybersecurity Framework (CSF) 2.0',
-    sub: 'Cryptographic control violations',
+    label: 'RBI Baseline Cyber Security Controls',
+    sub: 'Cryptographic control violations (DBS.CO/CSITE/BC.11/33.01.001/2015-16, Annex-1; Digital Payment Security Controls, 2021)',
     icon: <Landmark size={16} />,
     accent: 'border-red-500',
-    empty: 'No RBI CSF 2.0 control violations detected in the current CBOM.',
+    empty: 'No RBI baseline control violations detected in the current CBOM.',
   },
   nist_ir_8547: {
-    label: 'NIST IR 8547 — PQC transition milestones',
-    sub: 'Crypto discovery → priority migration → full transition',
+    label: 'NIST IR 8547 — PQC transition',
+    sub: 'Deprecate 112-bit quantum-vulnerable algorithms after 2030 · disallow after 2035',
     icon: <Clock3 size={16} />,
     accent: 'border-cobalt-500',
     empty: 'No quantum-vulnerable assets — inventory is tracking the NIST IR 8547 timeline.',
@@ -112,7 +112,7 @@ const ComplianceMapper = () => {
             Cross-framework regulatory mapper
           </h3>
           <p className="mt-0.5 text-[11px] text-slate-500">
-            RBI CSF 2.0 · NIST IR 8547 (PQC transition) · India DST/TEC (National Quantum Mission)
+            RBI baseline cyber controls · NIST IR 8547 (PQC transition) · India DST/TEC (National Quantum Mission)
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">

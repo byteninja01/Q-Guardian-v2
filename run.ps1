@@ -1,11 +1,14 @@
 # Q-Guardian Run Script
 
 $BackendPy = "python"
-if (Test-Path "backend\.venv\Scripts\python.exe") {
-    $BackendPy = (Resolve-Path "backend\.venv\Scripts\python.exe").Path
+$VenvCandidates = @("backend\venv\Scripts\python.exe", "backend\.venv\Scripts\python.exe")
+$FoundVenv = $VenvCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+if ($FoundVenv) {
+    $BackendPy = (Resolve-Path $FoundVenv).Path
     Write-Host "Using project virtualenv Python: $BackendPy" -ForegroundColor Green
 } else {
-    Write-Host "WARNING: backend/.venv not found — installing backend requirements into system Python." -ForegroundColor Yellow
+    Write-Host "WARNING: no backend venv found (checked backend\venv and backend\.venv) - installing backend requirements into system Python." -ForegroundColor Yellow
     Push-Location backend
     python -m pip install -r requirements.txt
     Pop-Location

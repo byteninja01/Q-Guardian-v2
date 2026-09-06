@@ -2,7 +2,11 @@ import requests
 import time
 from urllib.parse import urljoin
 import urllib3
+from app.net_guard import assert_target_allowed, TargetNotAllowed
+from app.settings import ALLOW_MUTATING_API_PROBES
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+_UA = {"User-Agent": "Q-Guardian-APIScan/2.0 (+authorized-testing-only)"}
 
 OWASP_CHECKS = {
     "API1": "Broken Object Level Authorization",
@@ -76,13 +80,18 @@ def check_jwt_bypass(base_url: str):
     for path in test_paths:
         try:
             target = urljoin(base_url, path)
-            r = requests.get(target, headers={"Authorization": f"Bearer {token}"}, timeout=3, verify=False)
-            # If a protected endpoint returns 200 with an alg:none token, it's vulnerable
+            # Baseline: the endpoint must actually be PROTECTED (401/403) without
+            # a token, otherwise a 200 with alg:none proves nothing (public route).
+            base = requests.get(target, timeout=3, verify=False, headers=_UA)
+            if base.status_code not in (401, 403):
+                continue
+            r = requests.get(target, headers={**_UA, "Authorization": f"Bearer {token}"}, timeout=3, verify=False)
             if r.status_code == 200:
                 return {
                     "id": "API2",
                     "severity": "CRITICAL",
-                    "detail": f"JWT Signature Bypass. Server accepted an unsigned token (alg:none) at {target}.",
+                    "detail": f"JWT Signature Bypass: {target} required auth (baseline {base.status_code}) "
+                              f"but accepted an unsigned alg:none token (200).",
                     "vector": "JWT_ALG_NONE"
                 }
         except:
@@ -129,31 +138,33 @@ def check_mass_assignment(base_url: str):
             pass
     return None
 
-def check_bfla(base_url: str):
-    """API5: Broken Function Level Authorization (Method switching, Admin paths)"""
-    # Test HTTP method switching
-    test_paths = ["/api/v1/users", "/api/v1/accounts"]
-    for path in test_paths:
-        target = urljoin(base_url, path)
-        try:
-            # Try a DELETE or PUT without auth
-            r = requests.delete(target, timeout=3, verify=False)
-            if r.status_code == 200:
-                return {
-                    "id": "API5",
-                    "severity": "CRITICAL",
-                    "detail": f"Broken Function Level Auth. Unauthorized HTTP DELETE allowed at {target}.",
-                    "vector": "BFLA_METHOD"
-                }
-        except:
-            pass
-            
-    # Test admin paths without auth
+def check_bfla(base_url: str, include_mutating: bool = False):
+    """API5: Broken Function Level Authorization (Method switching, Admin paths).
+
+    The DELETE method-switching probe is destructive and only runs when
+    include_mutating is True (ALLOW_MUTATING_API_PROBES). The admin-path check is
+    a read-only GET and always runs."""
+    if include_mutating:
+        for path in ["/api/v1/users", "/api/v1/accounts"]:
+            target = urljoin(base_url, path)
+            try:
+                r = requests.delete(target, timeout=3, verify=False, headers=_UA)
+                if r.status_code == 200:
+                    return {
+                        "id": "API5",
+                        "severity": "CRITICAL",
+                        "detail": f"Broken Function Level Auth. Unauthorized HTTP DELETE allowed at {target}.",
+                        "vector": "BFLA_METHOD"
+                    }
+            except:
+                pass
+
+    # Test admin paths without auth (read-only)
     admin_paths = ["/api/v1/admin/users", "/api/v1/admin/config"]
     for path in admin_paths:
         target = urljoin(base_url, path)
         try:
-            r = requests.get(target, timeout=3, verify=False)
+            r = requests.get(target, timeout=3, verify=False, headers=_UA)
             if r.status_code == 200:
                  return {
                     "id": "API5",
@@ -171,8 +182,12 @@ def run_api_scan(base_url: str):
     info_disclosure = []
     endpoints_checked = []
 
-    # --- Step 0: Normalize the URL (fix missing scheme) ---
+    # --- Step 0: Normalize the URL (fix missing scheme) + SSRF guard ---
     base_url = normalize_url(base_url)
+    try:
+        assert_target_allowed(base_url)
+    except TargetNotAllowed as e:
+        return {"error": str(e)}
 
     tls_enforced = False
     if base_url.startswith("https"):
@@ -235,7 +250,9 @@ def run_api_scan(base_url: str):
             if r.status_code in [429, 503]:
                 rate_limited = True
                 break
-            if r.status_code < 500:
+            # Only genuine 2xx responses count — a fast-404ing host is NOT proof
+            # of a missing rate limit.
+            if 200 <= r.status_code < 300:
                 successful_probes += 1
         except Exception:
             # Drop errors during burst probe but do not count as success
@@ -269,15 +286,17 @@ def run_api_scan(base_url: str):
         '/health', '/docs', '/graphql', '/admin', '/api/users', '/api/accounts'
     ]
     auth_required = False
+    open_endpoint_seen = False  # a real 200 on an API-ish path (positive evidence)
 
     for path in common_paths:
         target = urljoin(base_url, path)
         try:
-            r = requests.get(target, timeout=4, verify=False)
+            r = requests.get(target, timeout=4, verify=False, headers=_UA)
             if r.status_code in [401, 403]:
                 auth_required = True
                 endpoints_checked.append({"url": target, "status": r.status_code})
             elif r.status_code == 200:
+                open_endpoint_seen = True
                 endpoints_checked.append({"url": target, "status": 200})
                 if any(kw in path for kw in ['swagger', 'openapi', 'docs', 'graphql']):
                     info_disclosure.append(f"API documentation is publicly accessible at {target}")
@@ -290,28 +309,34 @@ def run_api_scan(base_url: str):
         except:
             pass
 
-    if not auth_required:
+    # Only assert "possibly unauthenticated" when we actually saw an OPEN (200)
+    # API endpoint AND never saw an auth challenge — a host that 404s everything
+    # is not evidence of a missing auth layer.
+    if not auth_required and open_endpoint_seen:
         findings.append({
             "id": "API2",
-            "severity": "CRITICAL",
-            "detail": "No authentication challenge (HTTP 401/403) was detected on any common API endpoint. The API may be entirely unauthenticated.",
+            "severity": "HIGH",
+            "detail": "An API endpoint returned HTTP 200 and no endpoint issued an auth challenge (401/403). "
+                      "The API may expose unauthenticated data — verify manually.",
             "vector": "NO_AUTH"
         })
-        
-    # --- Deep Scanning Modules ---
+
+    # --- Deep Scanning Modules (read-only by default) ---
     idor_res = check_idor(base_url)
     if idor_res: findings.append(idor_res)
-    
+
     jwt_res = check_jwt_bypass(base_url)
     if jwt_res: findings.append(jwt_res)
-    
+
     gql_res = check_graphql_introspection(base_url)
     if gql_res: findings.append(gql_res)
-    
-    mass_assign_res = check_mass_assignment(base_url)
-    if mass_assign_res: findings.append(mass_assign_res)
-    
-    bfla_res = check_bfla(base_url)
+
+    # State-changing probes (POST privileged fields / DELETE) only with opt-in.
+    if ALLOW_MUTATING_API_PROBES:
+        mass_assign_res = check_mass_assignment(base_url)
+        if mass_assign_res: findings.append(mass_assign_res)
+
+    bfla_res = check_bfla(base_url, include_mutating=ALLOW_MUTATING_API_PROBES)
     if bfla_res: findings.append(bfla_res)
 
 

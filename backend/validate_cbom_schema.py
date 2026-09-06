@@ -43,6 +43,12 @@ def main():
 
     schema_path = SCHEMA_CACHE
     if not os.path.exists(schema_path):
+        if os.getenv("ALLOW_NETWORK_SCHEMA_FETCH", "").lower() != "true":
+            raise SystemExit(
+                f"BLOCKED: {schema_path} is missing and network fetch is disabled "
+                f"(this check must stay offline/hermetic for CI). Commit the schema file, "
+                f"or set ALLOW_NETWORK_SCHEMA_FETCH=true to fetch it once from {SCHEMA_URL}."
+            )
         print(f"Fetching official schema from {SCHEMA_URL} ...")
         req = urllib.request.Request(SCHEMA_URL, headers={"User-Agent": "q-guardian-schema-check"})
         with urllib.request.urlopen(req, timeout=60) as resp:
@@ -57,16 +63,19 @@ def main():
     jsonschema.validate(instance=cbom, schema=schema)
     print("\nPASS: CBOM validates cleanly against the official CycloneDX 1.6 JSON schema.")
 
-    # Structural spot-checks the schema enforces via cryptoProperties
+    # Structural spot-checks the schema enforces via cryptoProperties.
+    # assetType legitimately varies (algorithm vs protocol vs related-crypto-material)
+    # — only components typed 'algorithm' are required to carry algorithmProperties.
     crypto_comps = [c for c in cbom["components"] if "cryptoProperties" in c]
     print(f"components with cryptoProperties: {len(crypto_comps)}")
     assert crypto_comps, "no cryptoProperties found"
+    asset_types = {c["cryptoProperties"]["assetType"] for c in crypto_comps}
+    print(f"assetTypes present: {sorted(asset_types)}")
     assert all(
-        c["cryptoProperties"]["assetType"] == "algorithm"
-        and "algorithmProperties" in c["cryptoProperties"]
-        for c in crypto_comps
-    ), "cryptoProperties structure incorrect"
-    print("cryptoProperties structure OK (algorithmProperties present on all).")
+        "algorithmProperties" in c["cryptoProperties"]
+        for c in crypto_comps if c["cryptoProperties"]["assetType"] == "algorithm"
+    ), "algorithm-typed components missing algorithmProperties"
+    print("cryptoProperties structure OK.")
 
 
 if __name__ == "__main__":

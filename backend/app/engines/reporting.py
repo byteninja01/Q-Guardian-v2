@@ -19,10 +19,13 @@ def generate_board_brief_pdf(assets, rating, scan_date=None):
     elements.append(Paragraph(f"BOARD BRIEF - {display_date}", styles['Heading2']))
     elements.append(Spacer(1, 12))
 
-    # Calculate Risk Statistics
-    critical_assets = [a for a in assets if a.get('mosca', {}).get('risk_state') == 'CRITICAL']
-    warning_assets = [a for a in assets if a.get('mosca', {}).get('risk_state') == 'WARNING']
-    all_days = [a.get('mosca', {}).get('days_remaining_worst', 9999) for a in assets]
+    # Calculate Risk Statistics (mosca may be a partial/fallback dict)
+    def _mosca(a):
+        m = a.get('mosca', {})
+        return m if isinstance(m, dict) else {}
+    critical_assets = [a for a in assets if _mosca(a).get('risk_state') == 'CRITICAL']
+    warning_assets = [a for a in assets if _mosca(a).get('risk_state') == 'WARNING']
+    all_days = [d for d in (_mosca(a).get('days_remaining_worst') for a in assets) if d is not None]
     min_days = min(all_days) if all_days else 0
 
     # Executive Summary
@@ -44,13 +47,15 @@ def generate_board_brief_pdf(assets, rating, scan_date=None):
     data = [["Asset Hostname", "Algorithm", "QTRI Score", "Mosca Countdown"]]
     
     # Sort assets by QTRI score (lowest first)
-    sorted_assets = sorted(assets, key=lambda x: x['qtri_score'])[:5]
+    sorted_assets = sorted(assets, key=lambda x: x.get('qtri_score') or 0)[:5]
     for asset in sorted_assets:
+        days = _mosca(asset).get('days_remaining_worst')
+        countdown = f"{days} Days" if days is not None else "N/A (safe/PQC)"
         data.append([
-            asset['hostname'],
-            asset['algorithm'],
-            str(asset['qtri_score']),
-            f"{asset['mosca']['days_remaining_worst']} Days"
+            asset.get('hostname', 'N/A'),
+            asset.get('algorithm', 'UNKNOWN'),
+            str(asset.get('qtri_score', 0)),
+            countdown
         ])
 
     t = Table(data)
@@ -69,16 +74,20 @@ def generate_board_brief_pdf(assets, rating, scan_date=None):
 
     # Regulatory Alignment
     elements.append(Paragraph("REGULATORY ALIGNMENT", styles['Heading3']))
-    elements.append(Paragraph("This report maps to RBI Cybersecurity Framework (CSF) 2.0 and NIST IR 8547 PQC Migration Guidelines.", styles['Normal']))
+    elements.append(Paragraph(
+        "Findings are mapped to RBI baseline cyber-resilience controls (Cyber Security Framework in Banks, "
+        "DBS.CO/CSITE/BC.11/33.01.001/2015-16, and the Master Direction on Digital Payment Security Controls, 2021), "
+        "NIST IR 8547 (PQC transition; deprecate 112-bit after 2030, disallow after 2035) and FIPS 203/204/205.",
+        styles['Normal']))
 
     # HNDL Grounding Disclaimer
     elements.append(Spacer(1, 12))
     elements.append(Paragraph("HNDL SIMULATION ADVISORY", styles['Heading3']))
     elements.append(Paragraph(
-        "<b>Weakly Grounded Notice:</b> Harvest-Now-Decrypt-Later (HNDL) exposure volumes reported in this brief are calculated using "
-        "RBI-tiered conservative traffic baselines (NSA HNDL Advisory 2023). Without real-time packet capture (PCAP) data or network "
-        "telemetry integration, these figures represent a <b>theoretical risk ceiling</b>, not a verified exfiltration measurement. "
-        "Security analysts should use these metrics for risk prioritization only.",
+        "<b>Weakly Grounded Notice:</b> Harvest-Now-Decrypt-Later (HNDL) exposure volumes in this brief are computed from "
+        "<b>illustrative, configurable per-tier traffic baselines</b> — they are not measured and not sourced from any regulator "
+        "or GRI publication. Only the CRQC arrival-probability weighting is model-derived. Without real packet-capture / network "
+        "telemetry these figures are a <b>theoretical risk ceiling</b> for prioritization, not a verified exfiltration measurement.",
         styles['Normal']
     ))
 

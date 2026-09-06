@@ -2,23 +2,27 @@
 import re
 
 # Frameworks:
-#   1. RBI CSF 2.0 (existing)   — cryptographic controls for Indian banking
-#   2. NIST IR 8547            — Post-Quantum Cryptography transition milestones
-#   3. India DST/TEC (NQM)     — National Quantum Mission horizon + TEC QSC guidance
+#   1. RBI baseline crypto controls — Indian banking (see RBI_* references below)
+#   2. NIST IR 8547                  — Post-Quantum Cryptography transition
+#   3. India DST/TEC (NQM)           — National Quantum Mission + TEC QSC guidance
 #
-# NIST IR 8547 (Nov 2025) recommends a phased PQC transition. Timeline flags
-# below are aligned to the published planning milestones:
-#   T1 - complete crypto discovery / inventory  -> Dec 2027
-#   T2 - prioritize & start migration          -> 2028 (S1/S2 critical)
-#   T3 - complete priority migration           -> 2030
-#   T4 - full enterprise migration             -> 2033
-
+# NIST IR 8547 "Transition to Post-Quantum Cryptography Standards" (initial public
+# draft, 2024) sets the REAL, published transition dates: deprecate the current
+# 112-bit-security quantum-vulnerable algorithms (e.g. RSA-2048, ECDSA P-256,
+# ECDH, finite-field DH) AFTER 2030, and DISALLOW them AFTER 2035. It defines no
+# "T1-T4" schedule. (The 2033 "exclusive use" date belongs to NSA CNSA 2.0 for
+# National Security Systems, tracked separately.)
 NIST_IR8547_MILESTONES = [
-    {"milestone": "T1 Discovery / Inventory", "deadline": "Dec 2027"},
-    {"milestone": "T2 Prioritize + Start Migration", "deadline": "2028"},
-    {"milestone": "T3 Priority Migration Complete", "deadline": "2030"},
-    {"milestone": "T4 Full Migration Complete", "deadline": "2033"},
+    {"milestone": "Deprecate 112-bit quantum-vulnerable algorithms (RSA-2048, ECDSA P-256, ECDH, FFDH)", "deadline": "after 2030"},
+    {"milestone": "Disallow quantum-vulnerable algorithms", "deadline": "after 2035"},
 ]
+CNSA2_NOTE = "NSA CNSA 2.0 requires exclusive PQC use for National Security Systems by 2033 (separate from NIST IR 8547)."
+
+# Real RBI document references (there is no single doc branded "CSF 2.0").
+RBI_BASELINE = ("RBI 'Cyber Security Framework in Banks' "
+                "(DBS.CO/CSITE/BC.11/33.01.001/2015-16), Annex-1 Baseline Cyber "
+                "Security and Resilience Requirements")
+RBI_DPSC = "RBI Master Direction on Digital Payment Security Controls (2021)"
 
 INDIA_TIMELINE = {
     "nqm_horizon": "2031",  # DST National Quantum Mission 2023-2031 scale-up window
@@ -27,7 +31,7 @@ INDIA_TIMELINE = {
 
 
 def map_to_rbi_controls(assets: list):
-    """Map only REAL cryptographic violations to RBI CSF 2.0 controls.
+    """Map only REAL cryptographic violations to RBI baseline crypto controls.
 
     TLS findings are restricted to assets that actually carry a TLS protocol
     (network endpoints, TLS libraries, key-agreement primitives) so that
@@ -53,7 +57,7 @@ def map_to_rbi_controls(assets: list):
         # 1. Legacy / insecure TLS protocols (TLS 1.0/1.1/SSLv2/3 only)
         if tls_ver in ("1.0", "1.1", "SSLv2", "SSLv3", "TLSv1", "TLSv1.1"):
             findings.append({
-                "control": "RBI CSF 2.0 Annexure 1, Section 4.2",
+                "control": f"{RBI_BASELINE} — encryption in transit (secure network configuration)",
                 "description": f"Deprecated TLS protocol version {tls_ver} in use.",
                 "remediation": "Upgrade to TLS 1.3 with PQC-ready cipher suites."
             })
@@ -61,7 +65,7 @@ def map_to_rbi_controls(assets: list):
         # 2. Weak public-key (sub-2048 RSA / legacy DSA)
         if "RSA" in algo and 0 < key_size < 2048:
             findings.append({
-                "control": "RBI CSF 2.0 Annexure 1, Section 5.1",
+                "control": f"{RBI_BASELINE} — cryptographic controls / key management",
                 "description": f"Weak RSA key size ({key_size}-bit).",
                 "remediation": "Replace with 4096-bit RSA or PQC-equivalent (ML-KEM-768 / ML-DSA)."
             })
@@ -69,7 +73,7 @@ def map_to_rbi_controls(assets: list):
         # 3. Broken / legacy hash functions (MD5, SHA-1)
         if re.search(r"MD5", algo) or re.search(r"SHA-?1\b", algo):
             findings.append({
-                "control": "RBI CSF 2.0 Annexure 1, Section 5.1",
+                "control": f"{RBI_BASELINE} — cryptographic controls / key management",
                 "description": f"Broken/legacy hash function {algo} used for security-sensitive data.",
                 "remediation": "Migrate to SHA-256/SHA-3 (FIPS 180-4 / FIPS 202) with HMAC where required."
             })
@@ -77,13 +81,13 @@ def map_to_rbi_controls(assets: list):
         # 4. Legacy symmetric ciphers / unsafe modes
         if re.search(r"(3DES|\bDES\b|RC4|RC2|BLOWFISH)", algo):
             findings.append({
-                "control": "RBI CSF 2.0 Annexure 1, Section 5.1",
+                "control": f"{RBI_BASELINE} — cryptographic controls / key management",
                 "description": f"Deprecated symmetric cipher {algo} in use.",
                 "remediation": "Replace with AES-256-GCM or ChaCha20-Poly1305 (authenticated)."
             })
         elif "ECB" in algo:
             findings.append({
-                "control": "RBI CSF 2.0 Annexure 1, Section 5.1",
+                "control": f"{RBI_BASELINE} — cryptographic controls / key management",
                 "description": "AES-ECB: block cipher in unauthenticated Electronic Codebook mode.",
                 "remediation": "Switch to AES-GCM (NIST SP 800-38D) with unique nonces."
             })
@@ -91,7 +95,7 @@ def map_to_rbi_controls(assets: list):
         # 5. Missing forward secrecy — only meaningful on TLS-bearing assets
         if tls_bearing and not asset.get("forward_secrecy", False):
             findings.append({
-                "control": "RBI CSF 2.0 Annexure 4, Section 2.3",
+                "control": f"{RBI_DPSC} — protection of data in transit (forward secrecy)",
                 "description": "Lack of Perfect Forward Secrecy (PFS) - HNDL Risk.",
                 "remediation": "Enable ECDHE or DHE key exchange mechanism."
             })
@@ -142,12 +146,12 @@ def map_to_nist_ir8547(assets: list):
         critical = risk_state == "CRITICAL" or tier in ("S1", "S2")
 
         milestone_flags = []
-        for m in NIST_IR8547_MILESTONES:
+        for idx, m in enumerate(NIST_IR8547_MILESTONES):
             if critical:
-                milestone_flags.append({"milestone": m["milestone"], "deadline": m["deadline"], "state": "AT-RISK"})
+                state = "AT-RISK"
             else:
-                state = "OPEN" if m["milestone"].startswith(("T1", "T2")) else "TRACK"
-                milestone_flags.append({"milestone": m["milestone"], "deadline": m["deadline"], "state": state})
+                state = "OPEN" if idx == 0 else "TRACK"  # deprecate(2030)=OPEN, disallow(2035)=TRACK
+            milestone_flags.append({"milestone": m["milestone"], "deadline": m["deadline"], "state": state})
 
         mapping.append({
             "hostname": asset.get("hostname", "unknown"),

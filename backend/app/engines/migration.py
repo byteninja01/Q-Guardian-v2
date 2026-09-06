@@ -93,26 +93,28 @@ MIGRATION_RULES = [
         "risk_reduction": "High (Shor's algorithm on ECC curves)",
         "config_snippet": "# Enroll dual-signature (ECDSA P-256 + ML-DSA-65) in signing stack.",
     },
-    # 7. RSA by key size
+    # 7. RSA by key size. RSA is used BOTH for key transport (-> ML-KEM, a KEM)
+    #    and for signatures (-> ML-DSA/SLH-DSA). A KEM cannot produce signatures,
+    #    so guidance names both targets by usage instead of forcing ML-KEM.
     {
         "tokens": ["RSA"],
         "key_min": 2048,
-        "target_algorithm": "Hybrid: RSA-3072/4096 + ML-KEM-768 (or pure ML-KEM-768)",
-        "nist_standard": "NIST FIPS 203 / SP 800-52r2 / SP 800-56Br2",
+        "target_algorithm": "Key exchange -> hybrid X25519MLKEM768 (FIPS 203); signatures/certs -> ML-DSA-65 (FIPS 204)",
+        "nist_standard": "NIST FIPS 203 (ML-KEM) / FIPS 204 (ML-DSA) / SP 800-52r2 / SP 800-56Br2",
         "effort_estimate": "4 to 8 weeks (certificate authority + key ceremony)",
         "risk_reduction": "High (Shor's algorithm breaks RSA factoring)",
-        "config_snippet": "ssl_ecdh_curve X25519MLKEM768:prime256v1;\nssl_protocols TLSv1.3;",
+        "config_snippet": "# requires nginx w/ OpenSSL 3.5+ (native ML-KEM) or the oqs-provider\nssl_ecdh_curve X25519MLKEM768:prime256v1;\nssl_protocols TLSv1.3;",
     },
     {
         "tokens": ["RSA"],
         "key_min": 1,
         "key_max": 2047,
-        "target_algorithm": "ML-KEM-768 (FIPS 203) hybrid — RSA-1024/512 is URGENT",
-        "nist_standard": "NIST FIPS 203 / SP 800-52r2",
-        "effort_estimate": "URGENT: 1 to 2 weeks (interim RSA-2048+, then ML-KEM-768)",
-        "risk_reduction": "Critical (80-bit RSA is classically breakable)",
-        "config_snippet": "openssl genpkey -algorithm rsa-pss -pkeyopt rsa_keygen_bits:2048  # interim\n# then migrate keys/certs to ML-KEM-768 hybrid.",
-        "note": "Sub-2048-bit RSA is broken classically; treat as P0 finding.",
+        "target_algorithm": "URGENT: rotate to RSA-3072+ now; then key exchange -> ML-KEM-768 (FIPS 203), signatures -> ML-DSA-65 (FIPS 204)",
+        "nist_standard": "NIST FIPS 203 / FIPS 204 / SP 800-52r2 / SP 800-131A Rev.2",
+        "effort_estimate": "URGENT: 1 to 2 weeks interim RSA-3072+ rotation, then PQC roll-out",
+        "risk_reduction": "Critical (RSA-1024 ~80-bit is deprecated and within nation-state reach)",
+        "config_snippet": "# interim classical rotation (choose by usage):\nopenssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072   # key transport\nopenssl genpkey -algorithm RSA-PSS -pkeyopt rsa_keygen_bits:3072  # signing\n# then migrate to ML-KEM-768 (key exchange) / ML-DSA-65 (signatures).",
+        "note": "RSA-512 has been publicly factored; RSA-1024 (~80-bit) is deprecated (NIST SP 800-131A) and within nation-state reach — treat as P0. It has not been publicly factored.",
     },
     # 8. Generic ECC key exchange (ECDH / P-256 etc.)
     {
@@ -131,40 +133,46 @@ PQC_BENCHMARKS = {
     "ML-KEM-768": {
         "primitive": "Key Encapsulation Mechanism (KEM)",
         "operation": "Encapsulation + Decapsulation",
-        "latency_hybrid": "~75 µs (X25519MLKEM768)",
-        "latency_pure": "~45 µs (Pure ML-KEM-768)",
+        "parameter_set": "ML-KEM-768 (Kyber768)",
+        "latency_hybrid": "~50-150 µs keygen+encap+decap combined (platform-dependent)",
+        "latency_pure": "sub-millisecond; dominated by hashing, not arithmetic",
         "ciphertext_size": "1,088 bytes",
         "public_key_size": "1,184 bytes",
         "bandwidth_overhead": "+1,056 bytes over X25519",
         "memory_cost": "< 12 KB heap",
         "nist_level": "Category 3 (AES-192 equivalent)",
-        "source": "NIST FIPS 203 / liboqs benchmark (Intel Core i7 / ARM Cortex-A72)"
+        "source": "Sizes: FIPS 203. Latency: order-of-magnitude only — run `openssl speed`/liboqs `speed_kem` on target hardware for real figures.",
+        "latency_caveat": "approximate, platform-dependent"
     },
     "ML-DSA-65": {
         "primitive": "Digital Signature Algorithm",
         "operation": "Sign + Verify",
-        "latency_hybrid": "~3.1 ms (RSA-3072 + ML-DSA-65 dual-sign)",
-        "latency_pure": "~2.6 ms sign / ~0.4 ms verify",
+        "parameter_set": "ML-DSA-65 (Dilithium3)",
+        "latency_hybrid": "dominated by the classical co-signature (RSA/ECDSA)",
+        "latency_pure": "~0.3-0.6 ms sign / ~0.1-0.2 ms verify on x86 AVX2 (platform-dependent)",
         "ciphertext_size": "N/A",
         "public_key_size": "1,952 bytes",
         "signature_size": "3,309 bytes",
         "bandwidth_overhead": "+3,053 bytes over RSA-2048",
         "memory_cost": "< 32 KB heap",
         "nist_level": "Category 3 (AES-192 equivalent)",
-        "source": "NIST FIPS 204 / BouncyCastle PQC & OpenSSL 3.3"
+        "source": "Sizes: FIPS 204. Latency: order-of-magnitude; measure on target hardware.",
+        "latency_caveat": "approximate, platform-dependent"
     },
     "SLH-DSA": {
         "primitive": "Stateless Hash-Based Signature",
         "operation": "Sign + Verify",
-        "latency_hybrid": "~88 ms dual-sign",
-        "latency_pure": "~85 ms sign / ~2.2 ms verify",
+        "parameter_set": "SLH-DSA-SHA2-128s (the -128f fast variant is ~10-30x faster to sign, larger sigs)",
+        "latency_hybrid": "signing is expensive (tens of ms for -128s); verify is fast",
+        "latency_pure": "~tens of ms sign / ~ms verify for -128s (platform-dependent)",
         "ciphertext_size": "N/A",
         "public_key_size": "32 bytes",
         "signature_size": "7,856 bytes",
         "bandwidth_overhead": "+7,600 bytes over ECDSA",
         "memory_cost": "< 8 KB heap",
         "nist_level": "Category 1 (AES-128 equivalent)",
-        "source": "NIST FIPS 205 (SPHINCS+)"
+        "source": "Sizes: FIPS 205 (SLH-DSA-SHA2-128s). Latency: order-of-magnitude; measure on target hardware.",
+        "latency_caveat": "approximate, platform-dependent; -128s vs -128f differ ~10-30x"
     },
     "AES-256-GCM": {
         "primitive": "Authenticated Symmetric Cipher",
@@ -208,15 +216,24 @@ def _resolve_benchmark(target_algorithm: str) -> dict:
         return PQC_BENCHMARKS["SHA-256"]
     return PQC_BENCHMARKS["ML-KEM-768"]
 
-def _apply_tls_notes(recommendation: dict, tls_version: str):
-    """TLS < 1.3 always tightens effort and NIST standard references."""
-    if tls_version and tls_version != "1.3":
-        recommendation["nist_standard"] += " & NIST SP 800-52 (TLS 1.3)"
-        recommendation["effort_estimate"] = "Urgent: protocol + crypto upgrade (1 week head start)"
-        recommendation["config_snippet"] = (
-            "ssl_protocols TLSv1.3;\nssl_prefer_server_ciphers off;\n"
-            + (recommendation.get("config_snippet") or "")
-        ).strip()
+def _apply_tls_notes(recommendation: dict, asset: dict):
+    """Add a SEPARATE TLS server-config note — only for assets that actually
+    terminate TLS. Never concatenate nginx directives onto a code snippet."""
+    tls_version = str(asset.get("tls_version") or "")
+    prim = str(asset.get("primitive", "")).lower()
+    source = str(asset.get("source_type", "")).lower()
+    tls_bearing = (
+        tls_version in ("1.0", "1.1", "1.2")
+        and (prim in ("key-agreement", "protocol") or "network" in source or source in ("", "network_live"))
+    )
+    if not tls_bearing:
+        return
+    recommendation["nist_standard"] += " & NIST SP 800-52r2 (TLS)"
+    recommendation["tls_config_snippet"] = (
+        "# nginx: enforce TLS 1.3 on this endpoint (separate from any code change above)\n"
+        "ssl_protocols TLSv1.3;"
+    )
+    recommendation["tls_note"] = f"Endpoint negotiates TLS {tls_version}; enforce TLS 1.3."
 
 
 def get_migration_playbook(asset: dict):
@@ -262,7 +279,7 @@ def get_migration_playbook(asset: dict):
             "align to NIST IR 8547 transition profile."
         )
 
-    _apply_tls_notes(recommendation, tls_version)
+    _apply_tls_notes(recommendation, asset)
     recommendation["benchmark"] = _resolve_benchmark(recommendation["target_algorithm"])
     return recommendation
 

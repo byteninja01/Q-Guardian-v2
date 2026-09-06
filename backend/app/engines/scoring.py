@@ -51,13 +51,46 @@ def _quantum_signal_cap(data: dict):
     return min(caps) if caps else None
 
 
+# Source types that are NOT live network endpoints — they have no TLS session,
+# cipher suite or certificate, so scoring them on those factors is a category
+# error (it structurally punishes a PQC binary/library). These are scored on the
+# crypto primitive itself instead.
+NON_NETWORK_SOURCES = {
+    "static_code", "static-source", "binary", "container",
+    "cloud_kms", "hardware_module", "kms", "hsm", "managed",
+}
+
+
+def _score_non_network(data: dict, cap):
+    """Q-TRI for assets with no TLS surface: base on PQC status + legacy caps,
+    without inventing or penalizing TLS/cipher/cert attributes."""
+    if data.get("is_pqc"):
+        base = 90
+    else:
+        try:
+            nist_level = int(data.get("nist_quantum_security_level") or 0)
+        except (TypeError, ValueError):
+            nist_level = 0
+        base = 80 if nist_level >= 1 else 60
+    if data.get("policy_compliant"):
+        base += 5
+    if cap is not None:
+        base = min(base, cap)
+    return max(0, min(100, int(base)))
+
+
 def calculate_qtri_score(data: dict):
     # Determine Tier (Default to S5 if missing)
     tier = data.get("sensitivity_tier", "S5")
     config = TIER_CONFIG.get(tier, TIER_CONFIG["S5"])
-    
+
+    # Non-network assets (source code, binaries, container libs, KMS/HSM keys)
+    # are scored on the crypto primitive, not on absent TLS fields.
+    if str(data.get("source_type", "")).lower() in NON_NETWORK_SOURCES:
+        return _score_non_network(data, _quantum_signal_cap(data))
+
     # Check if host was even reachable
-    if data.get("tls_version", "Unknown") == "Unknown":
+    if data.get("tls_version", "Unknown") in ("Unknown", None):
         return 0
 
     # 1. TLS Score (0.0 to 1.0)
@@ -106,9 +139,22 @@ def calculate_qtri_score(data: dict):
         
     return max(0, min(100, int(final_score)))
 
-def calculate_cyber_rating(qtri_scores: list):
+def calculate_cyber_rating(qtri_scores: list, mosca_states: list = None):
+    """Enterprise 0-1000 rating.
+
+    Base = average Q-TRI (which already weights PQC adoption and caps legacy
+    algorithms) scaled to 0-1000. It is then discounted by the share of assets
+    that fall inside the Mosca risk window (X+Y > Z), so the headline number
+    reflects the quantum-timeline math, not just static TLS hygiene.
+    """
     if not qtri_scores:
         return 0
     avg_score = sum(qtri_scores) / len(qtri_scores)
-    # Scale 0-100 to 0-1000
-    return int(avg_score * 10)
+    rating = avg_score * 10  # 0-100 -> 0-1000
+
+    if mosca_states:
+        at_risk = sum(1 for s in mosca_states if str(s).upper() in ("CRITICAL", "WARNING"))
+        frac = at_risk / len(mosca_states)
+        rating *= (1 - 0.25 * frac)  # up to a 25% haircut when the portfolio is in-window
+
+    return int(max(0, min(1000, rating)))

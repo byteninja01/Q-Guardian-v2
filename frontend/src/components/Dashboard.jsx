@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { Link } from 'react-router-dom';
 import { BarChart, Bar, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
-import { ShieldCheck, Clock, AlertTriangle, FileText, Activity, Database, CheckCircle2, Radar, TimerReset, Waypoints } from 'lucide-react';
+import { ShieldCheck, Clock, AlertTriangle, FileText, Activity, Database, CheckCircle2, Radar, TimerReset, Waypoints, ArrowRight } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { API_BASE } from '../lib/api.js';
 
@@ -35,9 +36,16 @@ const Dashboard = ({ assets, rating }) => {
         </div>
         <h2 className="text-lg font-bold tracking-tight text-navy">Platform ready</h2>
         <p className="mb-6 mt-1.5 max-w-lg text-[13px] text-slate-500">
-          There are no scanned assets in the inventory yet. Enter a sector domain in the
-          header above and trigger a network scan to begin post-quantum risk analysis.
+          There are no scanned assets in the inventory yet. Run your first scan — source
+          code, a container image, a compiled binary, or a live domain — to begin
+          post-quantum risk analysis.
         </p>
+        <Link
+          to="/scan"
+          className="inline-flex items-center gap-2 rounded-lg bg-cobalt-600 px-5 py-2.5 text-[12px] font-bold text-white transition-colors hover:bg-cobalt-700"
+        >
+          Go to Scan Center <ArrowRight size={14} />
+        </Link>
       </div>
     );
   }
@@ -148,12 +156,19 @@ const Dashboard = ({ assets, rating }) => {
   );
 };
 
-const IntelItem = ({ date, source, title, impact }) => (
+const IntelItem = ({ date, source, title, relevance, sample }) => (
   <div className="flex items-start gap-3 px-5 py-3 transition-colors hover:bg-slate-50">
     <span className="mt-0.5 inline-flex h-1.5 w-1.5 shrink-0 rounded-full bg-cobalt-300" />
     <div className="min-w-0 flex-1">
-      <div className="text-[13px] font-medium leading-snug text-slate-800">{title}</div>
-      <div className="mt-0.5 text-[11px] text-slate-400">Impact: {impact}</div>
+      <div className="text-[13px] font-medium leading-snug text-slate-800">
+        {title}
+        {sample && (
+          <span className="ml-2 rounded border border-amber-200 bg-amber-50 px-1 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700">
+            sample
+          </span>
+        )}
+      </div>
+      <div className="mt-0.5 text-[11px] text-slate-400">Relevance: {relevance}</div>
     </div>
     <div className="flex shrink-0 flex-col items-end gap-1">
       <span className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-wider text-slate-500">

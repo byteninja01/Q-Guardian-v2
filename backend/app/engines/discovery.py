@@ -7,6 +7,9 @@ import urllib3
 from cryptography import x509
 from app.settings import DISCOVERY_MAX_ASSETS
 from app.engines.active_discovery import discover_active_surface
+from app.net_guard import assert_target_allowed, TargetNotAllowed
+
+_HTTP_HEADERS = {"User-Agent": "Q-Guardian-Discovery/2.0 (+quantum-risk-audit)"}
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -66,7 +69,7 @@ def classify_sensitivity_tier(hostname: str, tls_data: dict, base_domain: str = 
 def get_subdomains_from_crtsh(domain: str):
     url = f"https://crt.sh/?q={domain}&output=json"
     try:
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, timeout=10, headers=_HTTP_HEADERS)
         if response.status_code == 200:
             data = response.json()
             subdomains = set()
@@ -138,8 +141,17 @@ def get_real_tls_info(hostname: str):
                 else:
                     result["algorithm"] = public_key.__class__.__name__
 
-                if "KYBER" in result["cipher_suite"] or "KEM" in result["cipher_suite"]:
-                    result["is_pqc"] = True
+                # Real hybrid PQC is negotiated in the KEY-EXCHANGE GROUP, not the
+                # symmetric cipher-suite name. Read ssock.group() where available
+                # (Python 3.13+); fall back gracefully on older runtimes.
+                try:
+                    group = ssock.group() if hasattr(ssock, "group") else None
+                except Exception:
+                    group = None
+                if group:
+                    result["negotiated_group"] = group
+                    if any(k in group.upper() for k in ("KYBER", "MLKEM", "ML-KEM", "SNTRUP", "FRODO")):
+                        result["is_pqc"] = True
     except Exception as e:
         result["error"] = str(e)
         
@@ -185,6 +197,8 @@ def scan_asset(hostname: str, base_domain: str = ""):
     }
 
 def run_discovery(domain: str):
+    # SSRF guard: refuse private/loopback/link-local (incl. cloud metadata).
+    assert_target_allowed(domain)
     subdomains = get_subdomains_from_crtsh(domain)
     # Add domain itself if not in subdomains
     if domain not in subdomains:

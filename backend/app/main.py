@@ -1,8 +1,10 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from typing import List, Optional
 import os
+import re
 import uuid
 import json
 from datetime import datetime, timedelta
@@ -10,7 +12,12 @@ from sqlmodel import Session, select
 
 # Import DB
 from app.database import engine, create_db_and_tables, get_session, DBScanJob, DBAsset, DBCBOMHistory
+try:
+    from app.database import DBAuditLog
+except Exception:  # pragma: no cover - table may be absent on older schemas
+    DBAuditLog = None
 from app.settings import FRONTEND_ORIGINS, FRONTEND_ORIGIN_REGEX
+from app.net_guard import resolve_scan_path, TargetNotAllowed
 from app.auth import (
     LoginRequest, TokenResponse,
     authenticate_user, create_access_token, verify_token,
@@ -86,6 +93,7 @@ async def login(req: LoginRequest):
         data={"sub": user["username"], "role": user["role"]},
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
+    _audit(user["username"], "login", "auth")
     return TokenResponse(
         access_token=token,
         token_type="bearer",
@@ -114,6 +122,57 @@ def _perform_update(session: Session, job_uuid: str, progress: int, step: str, s
         session.add(job)
         session.commit()
 
+_OID_MAP = {
+    "RSA": "1.2.840.113549.1.1.1",
+    "ECDSA": "1.2.840.10045.2.1",
+    "EC": "1.2.840.10045.2.1",
+    "X25519": "1.3.101.110",
+    "ML-KEM-768": "2.16.840.1.101.3.4.4.2",
+    "ML-DSA-65": "2.16.840.1.101.3.4.3.18",
+}
+
+
+def _derive_crypto_fields(algorithm: str, key_size, is_pqc: bool) -> dict:
+    """Derive CBOM crypto metadata (primitive/classical level/oid) from a network
+    asset's algorithm + key size, instead of leaving misleading schema defaults."""
+    algo = (algorithm or "").upper()
+    try:
+        ks = int(key_size or 0)
+    except (TypeError, ValueError):
+        ks = 0
+    primitive, classical, oid = "unknown", None, None
+    if "RSA" in algo:
+        primitive = "public-key-encryption"
+        classical = 80 if ks and ks < 2048 else (112 if ks <= 2048 else (128 if ks <= 3072 else 152))
+        oid = _OID_MAP["RSA"]
+    elif "ECDSA" in algo or algo.startswith("EC-") or "ECDH" in algo:
+        primitive = "signature" if "ECDSA" in algo else "key-agreement"
+        classical = 128
+        oid = _OID_MAP["ECDSA"]
+    elif "X25519" in algo:
+        primitive = "key-agreement"; classical = 128; oid = _OID_MAP["X25519"]
+    elif "ML-KEM" in algo or "KYBER" in algo:
+        primitive = "key-agreement"; classical = 192; oid = _OID_MAP.get("ML-KEM-768")
+    elif "ML-DSA" in algo or "DILITHIUM" in algo:
+        primitive = "signature"; classical = 192; oid = _OID_MAP.get("ML-DSA-65")
+    nql = 3 if is_pqc else 0
+    return {"primitive": primitive, "classical_security_level": classical,
+            "nist_quantum_security_level": nql, "oid": oid}
+
+
+def _audit(username: str, action: str, target: str = ""):
+    """Best-effort audit-trail write (never breaks the request path)."""
+    if DBAuditLog is None:
+        return
+    try:
+        with Session(engine) as s:
+            s.add(DBAuditLog(timestamp=datetime.now().isoformat(),
+                             username=username or "unknown", action=action, target=target[:400]))
+            s.commit()
+    except Exception as e:
+        print(f"[audit] write failed: {e}")
+
+
 def process_scan_background(job_uuid: str, domain: str, harvest_start: str = "2023-01-01"):
     try:
         update_job_progress(job_uuid, 5, "Initializing engines...", "SCANNING")
@@ -138,9 +197,12 @@ def process_scan_background(job_uuid: str, domain: str, harvest_start: str = "20
                 # Analytics Phase
                 update_job_progress(job_uuid, int(progress_base + 5), f"Calculating Q-TRI and Mosca metrics for {asset['hostname']}...", session=session)
                 qtri = calculate_qtri_score(asset)
-                mosca = calculate_mosca_clocks(derive_migration_complexity(asset), asset["sensitivity_tier"])
+                mosca = calculate_mosca_clocks(
+                    derive_migration_complexity(asset), asset["sensitivity_tier"],
+                    is_pqc=asset.get("is_pqc", False))
                 hndl = calculate_hndl_exposure(asset, harvest_start)
-                
+                crypto = _derive_crypto_fields(asset["algorithm"], asset["key_size"], asset.get("is_pqc", False))
+
                 db_asset = DBAsset(
                     asset_uuid=str(uuid.uuid4()),
                     job_uuid=job_uuid,
@@ -156,6 +218,11 @@ def process_scan_background(job_uuid: str, domain: str, harvest_start: str = "20
                     is_pqc=asset["is_pqc"],
                     policy_compliant=asset["policy_compliant"],
                     qtri_score=qtri,
+                    source_type=asset.get("source_type", "network_live"),
+                    primitive=crypto["primitive"],
+                    classical_security_level=crypto["classical_security_level"] or 0,
+                    nist_quantum_security_level=crypto["nist_quantum_security_level"],
+                    oid=crypto["oid"],
                     mosca_data=json.dumps(mosca),
                     hndl_data=json.dumps(hndl) if hndl else None,
                     open_ports_data=json.dumps(asset.get("open_ports", [])),
@@ -168,10 +235,11 @@ def process_scan_background(job_uuid: str, domain: str, harvest_start: str = "20
         update_job_progress(job_uuid, 90, "Finalizing report and compliance mapping...")
         update_job_progress(job_uuid, 100, "Scan Complete", "COMPLETED")
     except Exception as e:
+        # Log the detail server-side; return only a generic message to clients.
         print(f"SCAN ERROR for {domain}: {str(e)}")
         import traceback
         traceback.print_exc()
-        update_job_progress(job_uuid, 0, f"Scan Failed: {str(e)}", "FAILED")
+        update_job_progress(job_uuid, 0, "Scan failed (see server logs).", "FAILED")
 
 @app.post("/api/v1/scan/trigger", tags=["Scan"])
 async def trigger_scan(
@@ -186,7 +254,8 @@ async def trigger_scan(
     session.commit()
     
     background_tasks.add_task(process_scan_background, job_uuid, req.domain, req.harvest_start)
-    
+    _audit(current_user.get("username", "unknown"), "scan_trigger", req.domain)
+
     return {"status": "success", "job_id": job_uuid}
 
 # API Scanner is intentionally public — used by external security teams
@@ -247,8 +316,15 @@ async def get_rating(
         return {"score": 0, "status": "N/A", "asset_count": 0}
         
     qtri_scores = [a.qtri_score for a in assets]
-    rating = calculate_cyber_rating(qtri_scores)
-    
+
+    def _state(a):
+        try:
+            return (json.loads(a.mosca_data) or {}).get("risk_state") if a.mosca_data else None
+        except Exception:
+            return None
+    mosca_states = [s for s in (_state(a) for a in assets) if s]
+    rating = calculate_cyber_rating(qtri_scores, mosca_states)
+
     status = "F — Insecure"
     if rating > 700: status = "A — Excellent"
     elif rating > 400: status = "B/C — Good"
@@ -319,8 +395,10 @@ async def get_board_brief(
 ):
     assets = _serialize_assets(session)
     qtri_scores = [a["qtri_score"] for a in assets]
-    rating_score = calculate_cyber_rating(qtri_scores) if qtri_scores else 0
-    
+    mosca_states = [(a.get("mosca") or {}).get("risk_state") for a in assets]
+    mosca_states = [s for s in mosca_states if s]
+    rating_score = calculate_cyber_rating(qtri_scores, mosca_states) if qtri_scores else 0
+
     status = "F — Insecure"
     if rating_score > 700: status = "A — Excellent"
     elif rating_score > 400: status = "B/C — Good"
@@ -423,6 +501,7 @@ def _save_discovered_assets_to_db(assets: list, job_uuid: str):
                 mosca = calculate_mosca_clocks(
                     derive_migration_complexity(a),
                     a.get("sensitivity_tier", "S3"),
+                    is_pqc=a.get("is_pqc", False),
                 )
             except Exception:
                 mosca = {
@@ -482,7 +561,7 @@ def _save_discovered_assets_to_db(assets: list, job_uuid: str):
                 scan_uuid=job_uuid,
                 total_assets=len(snapshot),
                 pqc_assets=sum(1 for s in snapshot if s["is_pqc"]),
-                critical_risks=sum(1 for s in snapshot if (s.get("qtri_score") or 100) < 30),
+                critical_risks=sum(1 for s in snapshot if s.get("qtri_score") is not None and s["qtri_score"] < 30),
                 cbom_json_data=json.dumps(snapshot),
             )
             session.add(history)
@@ -499,22 +578,21 @@ async def scan_source(
     current_user: dict = Depends(verify_token)  # 🔒 Protected
 ):
     """AST-based static source code scanner. Accepts a file or directory path."""
-    target = req.target_path.strip()
+    try:
+        target = resolve_scan_path(req.target_path)
+    except TargetNotAllowed as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
-    # Basic SSRF / path-traversal guard: reject remote URLs
-    if target.startswith(("http://", "https://", "//")):
-        raise HTTPException(status_code=400, detail="Remote URLs not supported for source scan. Provide a local path.")
-
-    import os
     if os.path.isdir(target):
-        assets = scan_directory_static(target)
+        # Offload the (potentially large) directory walk off the event loop.
+        assets = await run_in_threadpool(scan_directory_static, target)
     elif os.path.isfile(target):
-        assets = scan_file_static(target)
+        assets = await run_in_threadpool(scan_file_static, target)
     else:
-        raise HTTPException(status_code=404, detail=f"Path not found: {target}")
+        raise HTTPException(status_code=404, detail="Path not found.")
 
     job_uuid = str(uuid.uuid4())
-    _save_discovered_assets_to_db(assets, job_uuid)
+    await run_in_threadpool(_save_discovered_assets_to_db, assets, job_uuid)
     cbom = CBOMGenerator.generate_json(assets)
 
     return {
@@ -545,17 +623,17 @@ async def scan_semgrep_endpoint(
     current_user: dict = Depends(verify_token)  # 🔒 Protected
 ):
     """Industrial Semgrep rule scanner based on OWASP crypto ruleset (rules/crypto.yml)."""
-    target = req.target_path.strip()
-    if target.startswith(("http://", "https://", "//")):
-        raise HTTPException(status_code=400, detail="Remote URLs not supported. Provide a local path.")
+    try:
+        target = resolve_scan_path(req.target_path)
+    except TargetNotAllowed as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
-    import os
     if not os.path.exists(target):
-        raise HTTPException(status_code=404, detail=f"Path not found: {target}")
+        raise HTTPException(status_code=404, detail="Path not found.")
 
-    assets = scan_semgrep(target)
+    assets = await run_in_threadpool(scan_semgrep, target)
     job_uuid = str(uuid.uuid4())
-    _save_discovered_assets_to_db(assets, job_uuid)
+    await run_in_threadpool(_save_discovered_assets_to_db, assets, job_uuid)
     cbom = CBOMGenerator.generate_json(assets)
 
     return {
@@ -585,14 +663,21 @@ async def scan_container_endpoint(
     session: Session = Depends(get_session),
     current_user: dict = Depends(verify_token)  # 🔒 Protected
 ):
-    """Container image scanner using Syft or deep container layer heuristic inspection."""
+    """Container image scanner using Trivy/Syft, or tag-inference heuristic fallback."""
     target = req.image_or_path.strip()
     if not target:
         raise HTTPException(status_code=400, detail="Image tag or path is required.")
 
-    assets = scan_container(target)
+    # If the target is a local path (Dockerfile/tar), confine it; image refs pass through.
+    if os.path.exists(target):
+        try:
+            target = resolve_scan_path(target)
+        except TargetNotAllowed as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    assets = await run_in_threadpool(scan_container, target)
     job_uuid = str(uuid.uuid4())
-    _save_discovered_assets_to_db(assets, job_uuid)
+    await run_in_threadpool(_save_discovered_assets_to_db, assets, job_uuid)
     cbom = CBOMGenerator.generate_json(assets)
 
     return {
@@ -622,16 +707,20 @@ async def scan_binary_endpoint(
     current_user: dict = Depends(verify_token)  # 🔒 Protected
 ):
     """Deep binary cryptographic scanner with ML-KEM NTT constants and S-Box signature detection."""
-    target = req.filepath.strip()
-    import os
-    if target.upper() in ["SAMPLE", "DEMO", "MOCK"]:
-        target = generate_sample_crypto_binary("sample_pqc_target.bin")
-    elif not os.path.exists(target):
-        raise HTTPException(status_code=404, detail=f"Binary file not found: {target}")
+    raw = req.filepath.strip()
+    if raw.upper() in ["SAMPLE", "DEMO", "MOCK"]:
+        target = generate_sample_crypto_binary(os.path.join(os.getcwd(), "sample_pqc_target.bin"))
+    else:
+        try:
+            target = resolve_scan_path(raw)
+        except TargetNotAllowed as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        if not os.path.isfile(target):
+            raise HTTPException(status_code=404, detail="Binary file not found.")
 
-    assets = scan_binary(target)
+    assets = await run_in_threadpool(scan_binary, target)
     job_uuid = str(uuid.uuid4())
-    _save_discovered_assets_to_db(assets, job_uuid)
+    await run_in_threadpool(_save_discovered_assets_to_db, assets, job_uuid)
     cbom = CBOMGenerator.generate_json(assets)
 
     return {
@@ -679,12 +768,19 @@ async def intake_kms_endpoint(
     session: Session = Depends(get_session),
     current_user: dict = Depends(verify_token)  # 🔒 Protected
 ):
-    """Ingest Cloud KMS inventory (AWS KMS, Azure Key Vault, Google Cloud KMS, Vault)."""
-    raw_records = req.records
-    if req.use_sample_fixtures or not raw_records:
-        raw_records = get_sample_kms_fixtures()
+    """Ingest caller-supplied Cloud KMS export records into the unified schema.
 
-    assets = ingest_kms_inventory(raw_records)
+    No live cloud SDK is used. Set use_sample_fixtures=true to explicitly load the
+    clearly-labeled SAMPLE fixtures; an empty body is a 400, never silent fakes."""
+    if req.use_sample_fixtures:
+        raw_records, data_source = get_sample_kms_fixtures(), "sample_fixture"
+    elif req.records:
+        raw_records, data_source = req.records, "user_import"
+    else:
+        raise HTTPException(status_code=400,
+                            detail="Provide 'records' (your KMS export) or set use_sample_fixtures=true.")
+
+    assets = ingest_kms_inventory(raw_records, data_source=data_source)
     job_uuid = str(uuid.uuid4())
     _save_discovered_assets_to_db(assets, job_uuid)
     cbom = CBOMGenerator.generate_json(assets)
@@ -693,6 +789,7 @@ async def intake_kms_endpoint(
         "status": "completed",
         "job_id": job_uuid,
         "intake_type": "cloud_kms",
+        "data_source": data_source,
         "assets_ingested": len(assets),
         "cbom_spec_version": cbom.get("specVersion", "1.6"),
         "findings_summary": [
@@ -700,6 +797,7 @@ async def intake_kms_endpoint(
                 "hostname": a["hostname"],
                 "algorithm": a["algorithm"],
                 "provider": a.get("evidence_file", ""),
+                "data_source": a.get("data_source", data_source),
                 "qtri_score": a["qtri_score"],
                 "is_pqc": a["is_pqc"],
                 "policy_compliant": a["policy_compliant"],
@@ -715,12 +813,19 @@ async def intake_hsm_endpoint(
     session: Session = Depends(get_session),
     current_user: dict = Depends(verify_token)  # 🔒 Protected
 ):
-    """Ingest Hardware Security Module (HSM) fleet inventory (Thales Luna, Utimaco, CloudHSM)."""
-    raw_records = req.records
-    if req.use_sample_fixtures or not raw_records:
-        raw_records = get_sample_hsm_fixtures()
+    """Ingest caller-supplied HSM fleet export records into the unified schema.
 
-    assets = ingest_hsm_inventory(raw_records)
+    No live HSM connection is made. Set use_sample_fixtures=true to load the
+    clearly-labeled SAMPLE fixtures; an empty body is a 400, never silent fakes."""
+    if req.use_sample_fixtures:
+        raw_records, data_source = get_sample_hsm_fixtures(), "sample_fixture"
+    elif req.records:
+        raw_records, data_source = req.records, "user_import"
+    else:
+        raise HTTPException(status_code=400,
+                            detail="Provide 'records' (your HSM export) or set use_sample_fixtures=true.")
+
+    assets = ingest_hsm_inventory(raw_records, data_source=data_source)
     job_uuid = str(uuid.uuid4())
     _save_discovered_assets_to_db(assets, job_uuid)
     cbom = CBOMGenerator.generate_json(assets)
@@ -729,6 +834,7 @@ async def intake_hsm_endpoint(
         "status": "completed",
         "job_id": job_uuid,
         "intake_type": "hardware_module",
+        "data_source": data_source,
         "assets_ingested": len(assets),
         "cbom_spec_version": cbom.get("specVersion", "1.6"),
         "findings_summary": [
@@ -736,6 +842,7 @@ async def intake_hsm_endpoint(
                 "hostname": a["hostname"],
                 "algorithm": a["algorithm"],
                 "make_model": a.get("evidence_file", ""),
+                "data_source": a.get("data_source", data_source),
                 "qtri_score": a["qtri_score"],
                 "is_pqc": a["is_pqc"],
                 "risk_state": a.get("mosca", {}).get("risk_state", "CRITICAL"),

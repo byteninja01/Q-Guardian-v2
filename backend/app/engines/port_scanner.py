@@ -1,5 +1,6 @@
 import socket
 import asyncio
+from app.net_guard import assert_target_allowed, TargetNotAllowed
 
 COMMON_PORTS = {
     80: 'HTTP',
@@ -35,7 +36,12 @@ async def scan_port(ip, port, timeout=1.0):
 async def scan_host_ports(hostname, ports_to_scan=None):
     if ports_to_scan is None:
         ports_to_scan = list(COMMON_PORTS.keys())
-    
+
+    try:
+        assert_target_allowed(hostname)
+    except TargetNotAllowed as e:
+        return {"hostname": hostname, "open_ports": [], "error": str(e)}
+
     try:
         ip = socket.gethostbyname(hostname)
     except socket.gaierror:

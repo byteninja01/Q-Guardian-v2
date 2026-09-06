@@ -15,23 +15,22 @@ const HNDLSimulator = ({ assets }) => {
     );
   }
 
-  // Generate timeline data for the chart
-  const data = [
-    { year: 2023, exposure: 0 },
-    { year: 2024, exposure: hndlAssets.reduce((sum, a) => sum + (a?.hndl?.hndl_risk_score ?? 0) * 0.2, 0) },
-    { year: 2025, exposure: hndlAssets.reduce((sum, a) => sum + (a?.hndl?.hndl_risk_score ?? 0) * 0.5, 0) },
-    { year: 2026, exposure: hndlAssets.reduce((sum, a) => sum + (a?.hndl?.hndl_risk_score ?? 0), 0) },
-    { year: 2027, exposure: hndlAssets.reduce((sum, a) => sum + (a?.hndl?.hndl_risk_score ?? 0) * 1.5, 0) },
-    { year: 2028, exposure: hndlAssets.reduce((sum, a) => sum + (a?.hndl?.hndl_risk_score ?? 0) * 2.2, 0) },
-    { year: 2029, exposure: hndlAssets.reduce((sum, a) => sum + (a?.hndl?.hndl_risk_score ?? 0) * 3.1, 0) },
-    { year: 2030, exposure: hndlAssets.reduce((sum, a) => sum + (a?.hndl?.hndl_risk_score ?? 0) * 4.5, 0) },
-  ];
+  // Illustrative ramp only — NOT a per-year model. The backend's HNDL score is a
+  // single point-in-time estimate; these multipliers just visualize "exposure
+  // compounds the longer harvested data sits unread," they are not projections
+  // for a specific future year. See the grounding advisory below.
+  const currentYear = new Date().getFullYear();
+  const RAMP = [0, 0.2, 0.5, 1.0, 1.5, 2.2, 3.1, 4.5];
+  const data = RAMP.map((mult, i) => ({
+    year: currentYear - 3 + i,
+    exposure: hndlAssets.reduce((sum, a) => sum + (a?.hndl?.hndl_risk_score ?? 0) * mult, 0),
+  }));
 
   return (
     <div className="space-y-6">
       <div className="glass-card p-6 border-l-4 border-red-600">
         <h3 className="text-slate-900 font-black text-sm mb-4 flex items-center gap-2">
-          <Activity size={18} className="text-red-600" /> HARVEST-NOW-DECRYPT-LATER (HNDL) EXPOSURE TIMELINE
+          <Activity size={18} className="text-red-600" /> HARVEST-NOW-DECRYPT-LATER (HNDL) — ILLUSTRATIVE EXPOSURE RAMP
         </h3>
         <div className="h-64">
           <ResponsiveContainer width="100%" height="100%">
@@ -59,7 +58,7 @@ const HNDLSimulator = ({ assets }) => {
               <div className="flex justify-between items-end mt-2">
                 <div>
                     <div className="text-2xl font-black text-slate-800">{asset.hndl.total_gb_at_risk} GB</div>
-                    <div className="text-[10px] font-bold text-red-600">TOTAL DATA AT RISK</div>
+                    <div className="text-[10px] font-bold text-red-600">EST. EXPOSURE (TIER BASELINE)</div>
                 </div>
                 <div className="text-right">
                     <div className="text-sm font-bold text-slate-600">Score: {asset.hndl.hndl_risk_score}</div>
@@ -71,7 +70,7 @@ const HNDLSimulator = ({ assets }) => {
               <div className="mt-2 pt-2 border-t border-slate-100 flex items-center gap-1">
                 <ShieldAlert size={10} className="text-slate-400" />
                 <span className="text-[9px] text-slate-400 uppercase tracking-tighter">
-                  {asset.hndl.methodology_note || "RBI Tier-Aligned Conservative Baseline"}
+                  {asset.hndl.traffic_basis || asset.hndl.methodology_note || "Illustrative tier baseline (not measured)"}
                 </span>
               </div>
            </div>
@@ -83,7 +82,7 @@ const HNDLSimulator = ({ assets }) => {
             <ShieldAlert size={14} /> HNDL SIMULATION GROUNDING ADVISORY
         </div>
         <p className="text-[11px] text-amber-800 leading-relaxed font-medium">
-            <strong>Disclaimer:</strong> This HNDL Simulation is <strong>Weakly Grounded</strong>. In the absence of real-time traffic logs, packet capture (PCAP) data, or integrated network telemetry, the reported exposure volumes (GB) are calculated using RBI-tiered conservative baselines and historical trajectory modeling. These figures represent potential exposure risk based on architectural patterns rather than exact measured data exfiltration. Application security analysts should treat these metrics as a theoretical risk ceiling.
+            <strong>Disclaimer:</strong> This HNDL simulation is <strong>weakly grounded</strong>. Only the CRQC arrival-probability weighting is derived from a cited model; the per-tier traffic volumes are illustrative, configurable baselines, not measured traffic or a published source. The year-by-year ramp above is an illustrative visualization of "exposure compounds over time," not a per-year forecast. In the absence of real-time traffic logs or packet-capture (PCAP) data, treat every figure here as a theoretical risk ceiling for prioritization, not a measured exfiltration volume.
         </p>
       </div>
     </div>

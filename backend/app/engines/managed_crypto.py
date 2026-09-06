@@ -1,10 +1,13 @@
 """
-Managed Cryptography & Hardware Security Module Intake Engine for Q-Guardian-v2
-Supports:
-1. Cloud KMS / Managed-Crypto: AWS KMS, Azure Key Vault, Google Cloud KMS, HashiCorp Vault
-2. Hardware Security Modules (HSMs): Thales Luna, Utimaco, AWS CloudHSM, YubiHSM
-Maps records into the unified DBAsset schema (source_type='cloud_kms' or 'hardware_module')
-and scores CRQC exposure via Mosca and Q-TRI.
+Managed Cryptography & HSM Intake Engine for Q-Guardian-v2.
+
+BRING-YOUR-OWN-INVENTORY: this engine does NOT connect to any cloud provider or
+HSM. It has no boto3/azure/google-cloud/hvac SDK and makes no network calls. It
+maps caller-supplied KMS/HSM export records (e.g. a CSV/JSON you export from
+`aws kms list-keys`, Azure/GCP, Vault, or an HSM audit) into the unified DBAsset
+schema (source_type='cloud_kms' or 'hardware_module') and scores CRQC exposure
+via Mosca and Q-TRI. Bundled sample fixtures are clearly tagged data_source=
+'sample_fixture' so demo data is never mistaken for a live inventory pull.
 """
 
 import re
@@ -54,9 +57,10 @@ def _classify_kms_algorithm(raw_algo: str, raw_size: Optional[int] = None) -> tu
     return raw_algo or "RSA-2048", size or 2048, "public-key-encryption", False, 112, 0
 
 
-def ingest_kms_inventory(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def ingest_kms_inventory(records: List[Dict[str, Any]], data_source: str = "user_import") -> List[Dict[str, Any]]:
     """
-    Ingest a batch of Cloud KMS key records into unified asset dictionaries.
+    Ingest a batch of caller-supplied Cloud KMS key records into unified assets.
+    data_source is stamped onto every asset ('user_import' or 'sample_fixture').
     """
     assets = []
     for rec in records:
@@ -78,18 +82,20 @@ def ingest_kms_inventory(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
         raw_asset = {
             "hostname": hostname,
-            "tls_version": "1.3",
+            "tls_version": "N/A",
             "algorithm": algo,
             "key_size": key_size,
-            "cipher_suite": f"KMS-{provider.upper()[:10]}-{algo[:15]}",
-            "forward_secrecy": primitive == "symmetric-cipher" or is_pqc,
-            "cert_valid": True,
-            "cert_expiry": (datetime.now() + timedelta(days=max(30, 365 - rotation_days))).isoformat(),
+            "cipher_suite": "N/A",
+            "forward_secrecy": None,
+            "cert_valid": None,
+            "cert_expiry": None,
             "sensitivity_tier": tier,
             "is_pqc": is_pqc,
             "policy_compliant": policy_compliant,
             "source_type": "cloud_kms",
             "asset_type": "kms_key",
+            "data_source": data_source,
+            "rotation_days": rotation_days,
             "evidence_file": f"{provider} [{region}]",
             "evidence_function": rec.get("key_arn") or rec.get("key_id") or key_name,
             "evidence_offset": rotation_days,
@@ -105,7 +111,7 @@ def ingest_kms_inventory(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         raw_asset["qtri_score"] = qtri
 
         complexity = derive_migration_complexity(raw_asset)
-        mosca = calculate_mosca_clocks(complexity, tier)
+        mosca = calculate_mosca_clocks(complexity, tier, is_pqc=is_pqc)
         hndl = calculate_hndl_exposure(raw_asset)
 
         raw_asset["mosca"] = mosca
@@ -126,11 +132,12 @@ def ingest_kms_inventory(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 # ── Hardware Security Module (HSM) Intake ────────────────────────────────────
 
-def ingest_hsm_inventory(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def ingest_hsm_inventory(records: List[Dict[str, Any]], data_source: str = "user_import") -> List[Dict[str, Any]]:
     """
-    Ingest Hardware Security Module (HSM) inventory records.
-    Scored for CRQC exposure: HSM with RSA/ECC long-lived keys and no PQC firmware
-    upgrade path is classified as critical risk.
+    Ingest caller-supplied Hardware Security Module (HSM) inventory records.
+    Scored for CRQC exposure: an HSM with RSA/ECC long-lived keys and no PQC
+    firmware upgrade path is classified as critical risk. data_source is stamped
+    onto every asset ('user_import' or 'sample_fixture').
     """
     assets = []
     for rec in records:
@@ -165,15 +172,18 @@ def ingest_hsm_inventory(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "tls_version": "N/A",
                 "algorithm": algo,
                 "key_size": key_size,
-                "cipher_suite": f"HSM-{make_model[:12]}-{fips_cert[:10]}",
-                "forward_secrecy": False,
-                "cert_valid": True,
-                "cert_expiry": (datetime.now() + timedelta(days=int(key_lifetime_years * 365))).isoformat(),
+                "cipher_suite": "N/A",
+                "forward_secrecy": None,
+                "cert_valid": None,
+                "cert_expiry": None,
                 "sensitivity_tier": tier,
                 "is_pqc": is_pqc,
                 "policy_compliant": policy_compliant,
                 "source_type": "hardware_module",
                 "asset_type": "hsm",
+                "data_source": data_source,
+                "fips_certification": fips_cert,
+                "key_lifetime_years": key_lifetime_years,
                 "evidence_file": f"{make_model} [{fips_cert}]",
                 "evidence_function": f"Slot/{serial_or_id} ({location})",
                 "evidence_offset": int(firmware_age_years * 365),
@@ -190,7 +200,7 @@ def ingest_hsm_inventory(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
             complexity = derive_migration_complexity(raw_asset)
             # Physical HSM replacement / firmware ceremony adds to complexity
-            mosca = calculate_mosca_clocks(complexity, tier)
+            mosca = calculate_mosca_clocks(complexity, tier, is_pqc=is_pqc)
             hndl = calculate_hndl_exposure(raw_asset)
 
             if has_long_lived_classical_risk:
@@ -219,7 +229,8 @@ def ingest_hsm_inventory(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 # ── Pre-Packaged Demo Fixtures ───────────────────────────────────────────────
 
 def get_sample_kms_fixtures() -> List[Dict[str, Any]]:
-    """Realistic enterprise Cloud KMS inventory fixtures for testing and live demo."""
+    """SAMPLE (synthetic) Cloud KMS inventory fixtures for demo/testing only.
+    These ARNs/URLs are fabricated and are NOT read from any live cloud account."""
     return [
         {
             "provider": "AWS KMS",
@@ -265,7 +276,8 @@ def get_sample_kms_fixtures() -> List[Dict[str, Any]]:
 
 
 def get_sample_hsm_fixtures() -> List[Dict[str, Any]]:
-    """Realistic banking HSM fleet fixtures for testing and live demo."""
+    """SAMPLE (synthetic) HSM fleet fixtures for demo/testing only.
+    Serials/models are fabricated and are NOT read from any live HSM."""
     return [
         {
             "make_model": "Thales Luna PCIe HSM 7",

@@ -76,13 +76,18 @@ INTERNAL_RULES = [
     {
         "id": "python-crypto-insecure-prng",
         "lang": "python",
-        "regex": r"random\.(random|randint|choice)\s*\(",
+        "regex": r"random\.(random|randint|choice|randrange|getrandbits|shuffle|sample)\s*\(",
+        # Only a finding when used in a security context — random.choice() for
+        # non-crypto purposes (tests, jitter, sampling) is not a weakness. This
+        # keeps precision high on ordinary codebases.
+        "context_keywords": ["key", "nonce", "salt", "token", "password", "passwd",
+                              "secret", "iv", "otp", "seed", "session", "csrf", "apikey"],
         "algorithm": "PRNG-MERSENNE-TWISTER",
         "primitive": "random",
         "classical_sec": 0,
         "nist_level": 0,
         "qtri": 35,
-        "recommendation": "Use secrets module or os.urandom() for key and nonce generation."
+        "recommendation": "Use the secrets module or os.urandom() for keys, nonces, tokens and salts."
     },
     {
         "id": "java-crypto-weak-hash-md5",
@@ -147,34 +152,43 @@ def scan_file_with_rules(filepath: str) -> List[Dict[str, Any]]:
     base_name = os.path.basename(filepath)
 
     for line_idx, line_content in enumerate(lines, start=1):
+        stripped = line_content.strip()
+        if stripped.startswith(("#", "//", "*")):
+            continue
         for rule in INTERNAL_RULES:
             if rule["lang"] != target_lang:
                 continue
-            if re.search(rule["regex"], line_content, re.IGNORECASE):
-                findings.append({
-                    "hostname": f"src:{base_name}:{line_idx}",
-                    "tls_version": "1.3" if rule["primitive"] == "key-agreement" else "N/A",
-                    "algorithm": rule["algorithm"],
-                    "key_size": 2048 if rule["primitive"] == "public-key-encryption" else 256,
-                    "cipher_suite": f"SEMGREP-{rule['id'].upper()[:25]}",
-                    "forward_secrecy": False,
-                    "cert_valid": True,
-                    "cert_expiry": datetime.now().isoformat(),
-                    "sensitivity_tier": "S2",
-                    "is_pqc": False,
-                    "policy_compliant": False,
-                    "qtri_score": rule["qtri"],
-                    "source_type": "static-source",
-                    "asset_type": "library",
-                    "evidence_file": filepath,
-                    "evidence_line": line_idx,
-                    "evidence_offset": None,
-                    "evidence_function": rule["id"],
-                    "primitive": rule["primitive"],
-                    "classical_security_level": rule["classical_sec"],
-                    "nist_quantum_security_level": rule["nist_level"],
-                    "recommendation": rule["recommendation"]
-                })
+            if not re.search(rule["regex"], line_content, re.IGNORECASE):
+                continue
+            ctx = rule.get("context_keywords")
+            if ctx and not any(k in line_content.lower() for k in ctx):
+                continue  # PRNG etc. only in a security context
+            key_size = 1024 if rule["algorithm"] in ("RSA-1024",) else None
+            findings.append({
+                "hostname": f"src:{base_name}:{line_idx}",
+                "tls_version": "N/A",
+                "algorithm": rule["algorithm"],
+                "key_size": key_size,
+                "cipher_suite": "N/A",
+                "forward_secrecy": None,
+                "cert_valid": None,
+                "cert_expiry": None,
+                "sensitivity_tier": "S2",
+                "is_pqc": False,
+                "policy_compliant": False,
+                "qtri_score": rule["qtri"],
+                "source_type": "static-source",
+                "asset_type": "library",
+                "evidence_file": filepath,
+                "evidence_line": line_idx,
+                "evidence_offset": None,
+                "evidence_function": rule["id"],
+                "detection_method": "internal-regex",
+                "primitive": rule["primitive"],
+                "classical_security_level": rule["classical_sec"],
+                "nist_quantum_security_level": rule["nist_level"],
+                "recommendation": rule["recommendation"]
+            })
     return findings
 
 def scan_with_semgrep_cli(target_path: str) -> Optional[List[Dict[str, Any]]]:
@@ -187,13 +201,21 @@ def scan_with_semgrep_cli(target_path: str) -> Optional[List[Dict[str, Any]]]:
     if not os.path.exists(rule_path):
         return None
 
-    cmd = [semgrep_bin, "--config", rule_path, "--json", target_path]
+    cmd = [semgrep_bin, "--config", rule_path, "--json", "--quiet",
+           "--metrics=off", target_path]
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
-        if res.returncode not in [0, 1]:
+        # CRITICAL: force UTF-8 decoding. On Windows the default (cp1252) raises
+        # UnicodeDecodeError on Semgrep's UTF-8 JSON, which used to be swallowed
+        # and silently degraded the whole engine to the weaker regex fallback.
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=120,
+                             encoding="utf-8", errors="replace")
+        if res.returncode not in (0, 1) or not res.stdout.strip():
+            print(f"[source_scanner] Semgrep CLI unusable (rc={res.returncode}); "
+                  f"falling back to internal rules. stderr: {res.stderr[:200]}")
             return None
         data = json.loads(res.stdout)
-    except Exception:
+    except Exception as e:
+        print(f"[source_scanner] Semgrep CLI failed ({e!r}); falling back to internal rules.")
         return None
 
     findings = []
@@ -209,11 +231,11 @@ def scan_with_semgrep_cli(target_path: str) -> Optional[List[Dict[str, Any]]]:
             "hostname": f"src:{os.path.basename(path)}:{start_line}",
             "tls_version": "N/A",
             "algorithm": meta.get("algorithm", "UNKNOWN"),
-            "key_size": 2048,
-            "cipher_suite": f"SEMGREP-{check_id.upper()[:25]}",
-            "forward_secrecy": False,
-            "cert_valid": True,
-            "cert_expiry": datetime.now().isoformat(),
+            "key_size": meta.get("key_size"),
+            "cipher_suite": "N/A",
+            "forward_secrecy": None,
+            "cert_valid": None,
+            "cert_expiry": None,
             "sensitivity_tier": "S2",
             "is_pqc": False,
             "policy_compliant": False,
@@ -223,6 +245,7 @@ def scan_with_semgrep_cli(target_path: str) -> Optional[List[Dict[str, Any]]]:
             "evidence_file": path,
             "evidence_line": start_line,
             "evidence_function": check_id,
+            "detection_method": "semgrep-cli",
             "primitive": meta.get("primitive", "unknown"),
             "classical_security_level": meta.get("classical_security", 80),
             "nist_quantum_security_level": meta.get("quantum_security", 0),
@@ -244,7 +267,10 @@ def scan_semgrep(target_path: str) -> List[Dict[str, Any]]:
         return scan_file_with_rules(target_path)
     elif os.path.isdir(target_path):
         all_findings = []
-        for root, _, files in os.walk(target_path):
+        ignore_dirs = {".git", "node_modules", "__pycache__", "venv", ".venv",
+                       "dist", "build", ".tox", "site-packages", "target"}
+        for root, dirs, files in os.walk(target_path):
+            dirs[:] = [d for d in dirs if d not in ignore_dirs]
             for fname in files:
                 if fname.endswith((".py", ".java")):
                     full_p = os.path.join(root, fname)

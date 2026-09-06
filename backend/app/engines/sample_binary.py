@@ -1,7 +1,14 @@
 """
-Sample Binary Generator and Test Target for Q-Guardian-v2
-Generates a realistic test binary artifact containing ML-KEM-768 NTT constants,
-AES S-box tables, and legacy MD5 constants for demo/testing.
+Sample Binary Generator for Q-Guardian-v2 — SYNTHETIC POSITIVE CONTROL.
+
+This is NOT a real compiled program. It writes a headerless byte blob with the
+scanner's own reference crypto constants (ML-KEM-768 signed NTT zeta table, AES
+S-box, MD5 IV) deliberately PLANTED into it, so the scanner is guaranteed to find
+them. Its only purpose is a deterministic smoke test / demo of the byte-signature
+matcher. It proves the matcher fires on a known-good input; it does NOT prove
+detection generalises to third-party binaries. Because the planted ML-KEM table
+uses the real signed FIPS-203 encoding, a genuine liboqs/PQClean/OpenSSL-3.5+
+Kyber binary would match the same signature.
 """
 
 import os

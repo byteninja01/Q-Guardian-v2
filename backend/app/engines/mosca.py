@@ -7,16 +7,23 @@ import re
 # Y: Data shelf life (Sensitivity)
 # Z: Time until Cryptographically Relevant Quantum Computer (CRQC)
 
+# Data shelf life Y (years). Illustrative RBI-sensitivity-tiered planning
+# assumptions for how long data must stay confidential — configurable, not
+# measured telemetry.
 SENSITIVITY_SHELF_LIFE = {
-    "S1": 10,  # 10 years (Core payment / PKI root)
-    "S2": 7,   # 7 years (KYC/Identity)
-    "S3": 5,   # 5 years (Transaction History)
-    "S4": 3,   # 3 years (Internal Business)
-    "S5": 1    # 1 year (Public Info)
+    "S1": 10,  # Core payment / PKI root
+    "S2": 7,   # KYC / Identity
+    "S3": 5,   # Transaction history
+    "S4": 3,   # Internal business
+    "S5": 1    # Public info
 }
 
-# Global Risk Institute (GRI) Quantum Threat Report probability distribution
-# Format: {years: (lower_quartile, upper_quartile)}
+# CRQC arrival probability curve P(CRQC <= horizon), as (lower, upper) bounds.
+# These are ILLUSTRATIVE expert-elicitation planning estimates broadly informed
+# by the Global Risk Institute (GRI) "Quantum Threat Timeline" survey trend
+# (near-term single-digit %, rising past ~50% around the 15-year horizon). They
+# are NOT a verbatim quote of a specific GRI table/figure and should be treated
+# as configurable planning assumptions, not a measured forecast.
 GRI_PROBABILITY_TABLE = {
     5:  (0.05, 0.12),
     10: (0.28, 0.49),
@@ -24,10 +31,10 @@ GRI_PROBABILITY_TABLE = {
     20: (0.75, 0.90),
 }
 
-# Conservative default bounds derived from GRI median projections
+# Default CRQC horizon bounds used for the days-remaining countdown.
 CRQC_TIMELINE_YEARS = {
-    "worst_case": 10,  # 10-yr GRI horizon (28% - 49% CRQC arrival probability)
-    "best_case": 15    # 15-yr GRI horizon (51% - 70% CRQC arrival probability)
+    "worst_case": 10,  # aggressive 10-yr horizon
+    "best_case": 15    # moderate 15-yr horizon
 }
 
 def get_gri_crqc_probability(years: float, bound: str = "median") -> float:
@@ -139,11 +146,33 @@ def derive_migration_complexity(asset: dict) -> float:
 
     return min(max(complexity, 0.5), 4.0)
 
-def calculate_mosca_clocks(migration_complexity: float, sensitivity_tier: str):
+def calculate_mosca_clocks(migration_complexity: float, sensitivity_tier: str,
+                           is_pqc: bool = False):
     # X = migration_complexity (years: 0.5 to 4.0)
     x = migration_complexity
     y = SENSITIVITY_SHELF_LIFE.get(sensitivity_tier, 1)
     t_total = x + y  # Total time window required for migration + data protection
+
+    # The Mosca inequality assumes quantum-vulnerable crypto. An asset that is
+    # ALREADY post-quantum is out of the risk window by definition — do not flag
+    # a completed migration as CRITICAL.
+    if is_pqc:
+        return {
+            "x_migration_years": x,
+            "y_shelf_life": y,
+            "total_protection_horizon": round(t_total, 2),
+            "days_remaining_worst": None,
+            "days_remaining_best": None,
+            "risk_state": "SAFE",
+            "gri_probability": {
+                "p_crqc_arrival_median": round(get_gri_crqc_probability(t_total), 3),
+                "p_crqc_arrival_range": [
+                    round(get_gri_crqc_probability(t_total, "lower"), 3),
+                    round(get_gri_crqc_probability(t_total, "upper"), 3),
+                ],
+                "note": "Asset is post-quantum; Mosca risk window not applicable.",
+            },
+        }
 
     # Calculate CRQC arrival probability across horizon T = X + Y
     p_arrival_median = get_gri_crqc_probability(t_total, bound="median")
@@ -172,12 +201,13 @@ def calculate_mosca_clocks(migration_complexity: float, sensitivity_tier: str):
         "y_shelf_life": y,
         "total_protection_horizon": round(t_total, 2),
         "days_remaining_worst": max(0, int(days_remaining_worst)),
-        "days_remaining_best": int(days_remaining_best),
+        "days_remaining_best": max(0, int(days_remaining_best)),
         "risk_state": risk_state,
         "gri_probability": {
             "p_crqc_arrival_median": round(p_arrival_median, 3),
             "p_crqc_arrival_range": [round(p_arrival_lower, 3), round(p_arrival_upper, 3)],
-            "gri_table_reference": {
+            "model_reference": {
+                "note": "Illustrative CRQC-arrival planning curve (see GRI_PROBABILITY_TABLE); not a specific GRI figure.",
                 "10yr": GRI_PROBABILITY_TABLE[10],
                 "15yr": GRI_PROBABILITY_TABLE[15]
             }

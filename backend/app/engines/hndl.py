@@ -2,15 +2,20 @@ from datetime import datetime, timedelta
 from app.engines.mosca import SENSITIVITY_SHELF_LIFE, get_gri_crqc_probability, GRI_PROBABILITY_TABLE
 
 # HNDL: Harvest Now, Decrypt Later
-# Exposure = Traffic Volume * Retention Window * Sensitivity * GRI CRQC Arrival Probability
-# Grounded on the Global Risk Institute (GRI) Quantum Threat Report probability distribution.
+# Exposure = Traffic Volume * Retention Window * Sensitivity * CRQC Arrival Probability
+#
+# HONESTY NOTE: only the CRQC arrival probability term is model-derived (see
+# mosca.get_gri_crqc_probability). The per-tier traffic volumes and sensitivity
+# multipliers below are ILLUSTRATIVE, configurable planning baselines — they are
+# NOT measured traffic and NOT sourced from any GRI publication. The resulting
+# "GB at risk" is therefore a theoretical planning ceiling, not telemetry.
 
 TIER_TRAFFIC_BASELINES = {
-    "S1": 800, # RTGS/NEFT core transaction throughput (GB/month)
-    "S2": 400, # Login, biometric, customer identity API traffic
-    "S3": 200, # Account statement queries & payment logs
-    "S4": 80,  # Internal business microservice traffic
-    "S5": 20   # Public web portal content
+    "S1": 800, # illustrative core transaction throughput (GB/month)
+    "S2": 400, # illustrative identity / auth API traffic
+    "S3": 200, # illustrative statement & payment-log traffic
+    "S4": 80,  # illustrative internal microservice traffic
+    "S5": 20   # illustrative public portal content
 }
 
 def calculate_hndl_exposure(asset: dict, harvest_start_date: str = "2023-01-01"):
@@ -41,10 +46,12 @@ def calculate_hndl_exposure(asset: dict, harvest_start_date: str = "2023-01-01")
     gri_prob_median = get_gri_crqc_probability(float(shelf_life_years), bound="median")
     gri_prob_upper = get_gri_crqc_probability(float(shelf_life_years), bound="upper")
 
-    # Modulated exposure value (GB * sensitivity * probability)
+    # Modulated exposure value (GB * sensitivity * probability). No probability
+    # floor — the weight is exactly the model arrival probability so the reported
+    # hndl_risk_score reconciles with gri_arrival_probability.
     raw_exposure = total_gb_at_risk * sensitivity_multiplier
-    probability_weighted_risk = raw_exposure * max(0.05, gri_prob_median)
-    
+    probability_weighted_risk = raw_exposure * gri_prob_median
+
     return {
         "traffic_volume_monthly_gb": traffic_volume,
         "months_captured": months_captured,
@@ -55,5 +62,9 @@ def calculate_hndl_exposure(asset: dict, harvest_start_date: str = "2023-01-01")
         "gri_upper_probability": round(gri_prob_upper, 3),
         "retention_shelf_life_years": shelf_life_years,
         "harvest_start_date": harvest_start.isoformat(),
-        "methodology_note": "GRI-Aligned Probability-Weighted HNDL Model (Global Risk Institute 2024)"
+        "traffic_basis": "illustrative tier baseline (configurable, not measured telemetry)",
+        "estimate_type": "theoretical planning ceiling",
+        "methodology_note": ("Probability-weighted HNDL model. Arrival probability from the "
+                             "CRQC planning curve; traffic/sensitivity weights are illustrative "
+                             "configurable baselines, not measured or GRI-published.")
     }
