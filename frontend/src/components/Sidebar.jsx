@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Radar, FileCode, Package, Cpu, Terminal, Globe2,
-  Database, Clock, ShieldCheck, Boxes, FileText, GitCompare,
+  Database, Clock, ShieldCheck, Boxes, FileText, GitCompare, Trash2,
 } from 'lucide-react';
 
 const NAV_SECTIONS = [
@@ -26,6 +26,7 @@ const NAV_SECTIONS = [
     label: 'Inventory',
     items: [
       { to: '/inventory', label: 'Asset Inventory', icon: Database },
+      { to: '/remove-assets', label: 'Remove Assets', icon: Trash2 },
     ],
   },
   {

@@ -6,6 +6,7 @@ import AppShell from './layouts/AppShell.jsx';
 
 const OverviewPage = lazy(() => import('./pages/OverviewPage'));
 const InventoryPage = lazy(() => import('./pages/InventoryPage'));
+const RemoveAssetsPage = lazy(() => import('./pages/RemoveAssetsPage'));
 const TopologyPage = lazy(() => import('./pages/TopologyPage'));
 const ReconcilePage = lazy(() => import('./pages/ReconcilePage'));
 const HndlPage = lazy(() => import('./pages/risk/HndlPage'));
@@ -35,6 +36,7 @@ function App() {
           <Route path="/scan/network" element={<NetworkScanPage />} />
 
           <Route path="/inventory" element={<InventoryPage />} />
+          <Route path="/remove-assets" element={<RemoveAssetsPage />} />
 
           <Route path="/risk/hndl" element={<HndlPage />} />
           <Route path="/risk/compliance" element={<CompliancePage />} />

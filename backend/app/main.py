@@ -306,6 +306,49 @@ async def list_assets(
 ):
     return _serialize_assets(session)
 
+@app.delete("/api/v1/assets/by-job/{job_uuid}", tags=["Assets"])
+async def delete_assets_by_job(
+    job_uuid: str,
+    session: Session = Depends(get_session),
+    current_user: dict = Depends(verify_token)  # 🔒 Protected
+):
+    """Remove every asset produced by one scan run (one scanned target) from
+    the inventory, along with its scan-job row and CBOM history snapshot."""
+    assets = session.exec(select(DBAsset).where(DBAsset.job_uuid == job_uuid)).all()
+    if not assets:
+        raise HTTPException(status_code=404, detail="No assets found for that job.")
+
+    deleted = len(assets)
+    for a in assets:
+        session.delete(a)
+
+    job = session.exec(select(DBScanJob).where(DBScanJob.job_uuid == job_uuid)).first()
+    if job:
+        session.delete(job)
+
+    history = session.exec(select(DBCBOMHistory).where(DBCBOMHistory.scan_uuid == job_uuid)).all()
+    for h in history:
+        session.delete(h)
+
+    session.commit()
+    _audit(current_user.get("username", "unknown"), "delete_target", job_uuid)
+    return {"status": "completed", "job_uuid": job_uuid, "deleted_assets": deleted}
+
+@app.delete("/api/v1/assets", tags=["Assets"])
+async def delete_all_assets(
+    session: Session = Depends(get_session),
+    current_user: dict = Depends(verify_token)  # 🔒 Protected
+):
+    """Wipe the entire asset inventory, all scan jobs, and all CBOM history."""
+    assets = session.exec(select(DBAsset)).all()
+    jobs = session.exec(select(DBScanJob)).all()
+    history = session.exec(select(DBCBOMHistory)).all()
+    for row in (*assets, *jobs, *history):
+        session.delete(row)
+    session.commit()
+    _audit(current_user.get("username", "unknown"), "delete_all_assets", f"{len(assets)} assets")
+    return {"status": "completed", "deleted_assets": len(assets), "deleted_jobs": len(jobs)}
+
 @app.get("/api/v1/enterprise/rating", tags=["Assets"])
 async def get_rating(
     session: Session = Depends(get_session),

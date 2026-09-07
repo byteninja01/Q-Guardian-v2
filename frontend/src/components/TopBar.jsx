@@ -10,6 +10,7 @@ const PAGE_META = {
   '/scan/api': { title: 'API Endpoint Scanner', crumb: ['Scan Center', 'API Endpoint'] },
   '/scan/network': { title: 'Network / Domain Scan', crumb: ['Scan Center', 'Network / Domain'] },
   '/inventory': { title: 'Asset Inventory', crumb: ['Inventory'] },
+  '/remove-assets': { title: 'Remove Assets', crumb: ['Inventory', 'Remove Assets'] },
   '/risk/hndl': { title: 'HNDL Exposure', crumb: ['Risk & Compliance', 'HNDL Exposure'] },
   '/risk/compliance': { title: 'Cert-IN Compliance Mapper', crumb: ['Risk & Compliance', 'Cert-IN Mapper'] },
   '/topology': { title: 'Dependency Graph', crumb: ['Topology'] },
